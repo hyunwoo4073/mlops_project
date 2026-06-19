@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Local database / MLflow
+mlflow.db
+mlflow.db-*
+mlruns/
+*.sqlite
+*.sqlite3
+*.db
+
+# Model artifacts
+models/
+*.pkl
+*.joblib
+*.onnx
+*.pt
+*.pth
+*.h5
+
+# Data files
+data/raw/
+data/processed/
+data/external/
+*.csv
+*.tsv
+*.parquet
+*.jsonl
+
+# But keep directory structure
+!data/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Docker / local volumes
+docker-data/
+postgres-data/
+
+# Logs
+logs/
+*.log
