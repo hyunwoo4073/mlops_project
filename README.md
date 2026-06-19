@@ -2,6 +2,8 @@
 
 
 # 디렉터리 구조
+```text
+.
 ├── README.md
 ├── dags
 ├── data
@@ -36,20 +38,15 @@
 └── src
     ├── common
     ├── inference
-    │   ├── __pycache__
-    │   │   └── api.cpython-312.pyc
     │   └── api.py
     ├── preprocessing
-    │   ├── __pycache__
-    │   │   ├── clean_text.cpython-312.pyc
-    │   │   ├── extract_skills.cpython-312.pyc
-    │   │   └── label_jobs.cpython-312.pyc
     │   ├── clean_text.py
     │   ├── extract_skills.py
     │   ├── label_jobs.py
     │   └── preprocess.py
     └── training
         └── train_baseline.py
+```
 
 # 디렉터리 및 파일 생성
 mkdir jobskill-mlops
