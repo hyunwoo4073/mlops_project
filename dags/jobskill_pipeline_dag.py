@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from airflow import DAG
-from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.bash import BashOperator
 
 
 PROJECT_ROOT = "/opt/airflow/project"
@@ -12,7 +12,7 @@ PYTHON_BIN = "python"
 
 default_args = {
     "owner": "bae",
-    "retries": 1,
+    "retries": 0,
 }
 
 
@@ -46,4 +46,9 @@ with DAG(
         bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/training/train_baseline.py",
     )
 
-    generate_sample_jobs >> load_raw_jobs >> preprocess_jobs >> train_model
+    batch_inference = BashOperator(
+        task_id="batch_inference",
+        bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/inference/batch_inference.py",
+    )
+
+    generate_sample_jobs >> load_raw_jobs >> preprocess_jobs >> train_model >> batch_inference
