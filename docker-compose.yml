@@ -4,19 +4,24 @@ x-airflow-common: &airflow-common
     - .env
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}
+
+    AIRFLOW__API_AUTH__JWT_SECRET: REMOVED_AIRFLOW_JWT_SECRET
+    AIRFLOW__API__SECRET_KEY: REMOVED_AIRFLOW_API_SECRET_KEY
+    AIRFLOW__CORE__FERNET_KEY: REMOVED_AIRFLOW_FERNET_KEY=
+
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
 
-    # Airflow 3.x Simple Auth Manager
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "1"
+    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+
     AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
     AIRFLOW__SIMPLE_AUTH_MANAGER__USERS: airflow:admin
     AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json
-
-    AIRFLOW__CORE__HOSTNAME_CALLABLE: airflow.utils.net.get_host_ip_address
-
-    AIRFLOW__API__SECRET_KEY: "dev_api_secret_key"
-    AIRFLOW__WEBSERVER__SECRET_KEY: "dev_webserver_secret_key"
 
     PYTHONPATH: /opt/airflow/project
 
@@ -126,6 +131,29 @@ services:
       postgres:
         condition: service_healthy
 
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    image: jobskill-api:latest
+    container_name: jobskill-api
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   jobskill_pgdata:
