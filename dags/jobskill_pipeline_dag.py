@@ -51,4 +51,14 @@ with DAG(
         bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/inference/batch_inference.py",
     )
 
-    generate_sample_jobs >> load_raw_jobs >> preprocess_jobs >> train_model >> batch_inference
+    check_training_data = BashOperator(
+        task_id="check_training_data",
+        bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/quality/check_training_data.py",
+    )
+
+    check_model_performance = BashOperator(
+        task_id="check_model_performance",
+        bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/quality/check_model_performance.py",
+    )
+    
+    generate_sample_jobs >> load_raw_jobs >> preprocess_jobs >> check_training_data >> train_model >> batch_inference
