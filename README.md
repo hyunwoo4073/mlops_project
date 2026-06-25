@@ -1,6 +1,6 @@
 # jobskill-mlops project
 
-채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 생성, 원천 적재, 전처리, 모델 학습, 실험 기록, 일괄 예측, API 추론까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
+채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 생성, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 일괄 예측, API 추론까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
 ## 프로젝트 목표
 
@@ -11,9 +11,11 @@
 → PostgreSQL raw 테이블 적재
 → 텍스트 정제 / 직무 라벨링 / 기술스택 추출
 → PostgreSQL cleaned / skills 테이블 저장
+→ 학습 데이터 품질 체크
 → TF-IDF + Logistic Regression 모델 학습
 → MLflow 실험 기록
 → 모델 artifact 저장
+→ 모델 성능 기준 체크
 → batch inference 실행
 → model_predictions 테이블 저장
 → FastAPI 단건 예측
@@ -28,10 +30,12 @@ flowchart LR
     B --> C[Preprocessing]
     C --> D[cleaned_job_posts]
     C --> E[job_post_skills]
-    D --> F[Train Model]
+    D --> Q1[Data Quality Check]
+    Q1 --> F[Train Model]
     F --> G[MLflow Tracking]
     F --> H[models/job_classifier.pkl]
-    H --> I[Batch Inference]
+    G --> Q2[Model Performance Check]
+    Q2 --> I[Batch Inference]
     I --> J[model_predictions]
     H --> K[FastAPI /predict]
     K --> J
@@ -43,7 +47,9 @@ flowchart LR
     L --> A
     L --> B
     L --> C
+    L --> Q1
     L --> F
+    L --> Q2
     L --> I
 ```
 
@@ -114,6 +120,9 @@ Container       : Docker Compose
 │   │   ├── extract_skills.py
 │   │   ├── label_jobs.py
 │   │   └── preprocess_db.py
+│   ├── quality/
+│   │   ├── check_training_data.py
+│   │   └── check_model_performance.py
 │   ├── training/
 │   │   └── train_baseline.py
 │   └── inference/
@@ -195,7 +204,37 @@ CASCADE;
 
 `model_predictions`와 `job_post_skills`가 `cleaned_job_posts`를 참조하므로, 단순히 `cleaned_job_posts`만 먼저 삭제하면 FK 제약조건 오류가 발생할 수 있습니다.
 
-### 4. 모델 학습
+### 4. 데이터 품질 체크
+
+`src/quality/check_training_data.py`
+
+전처리 결과가 모델 학습에 적합한지 확인합니다.
+
+검증 항목:
+
+```text
+raw_job_posts 데이터 존재 여부
+cleaned_job_posts 최소 학습 데이터 수
+job_post_skills 추출 결과 존재 여부
+text_for_model 누락 여부
+job_category 누락 여부
+직무 카테고리 다양성
+Unknown 라벨 비율
+```
+
+Airflow DAG에서는 `preprocess_jobs` 이후, `train_model` 이전에 실행됩니다.
+
+```text
+preprocess_jobs
+    ↓
+check_training_data
+    ↓
+train_model
+```
+
+데이터 품질 기준을 통과하지 못하면 DAG를 실패시켜, 부적절한 데이터로 모델 학습이 진행되지 않도록 합니다.
+
+### 5. 모델 학습
 
 `src/training/train_baseline.py`
 
@@ -216,7 +255,32 @@ MLflow experiment/run 기록
 MLflow model artifact 저장
 ```
 
-### 5. Batch Inference
+### 6. 모델 성능 체크
+
+`src/quality/check_model_performance.py`
+
+MLflow에 기록된 최신 학습 run의 metric을 조회해 모델 성능 기준을 검증합니다.
+
+검증 항목:
+
+```text
+accuracy >= MIN_MODEL_ACCURACY
+f1_weighted >= MIN_MODEL_F1_WEIGHTED
+```
+
+Airflow DAG에서는 `train_model` 이후, `batch_inference` 이전에 실행됩니다.
+
+```text
+train_model
+    ↓
+check_model_performance
+    ↓
+batch_inference
+```
+
+모델 성능이 기준보다 낮으면 DAG를 실패시켜, 낮은 품질의 모델로 batch inference가 수행되지 않도록 합니다.
+
+### 7. Batch Inference
 
 `src/inference/batch_inference.py`
 
@@ -228,7 +292,7 @@ cleaned_job_posts
 → model_predictions 저장
 ```
 
-### 6. FastAPI
+### 8. FastAPI
 
 `src/inference/api.py`
 
@@ -244,7 +308,7 @@ POST /predict
 → model_predictions 테이블 저장
 ```
 
-### 7. Airflow DAG
+### 9. Airflow DAG
 
 `dags/jobskill_pipeline_dag.py`
 
@@ -257,7 +321,11 @@ load_raw_jobs
     ↓
 preprocess_jobs
     ↓
+check_training_data
+    ↓
 train_model
+    ↓
+check_model_performance
     ↓
 batch_inference
 ```
@@ -328,10 +396,18 @@ MLFLOW_DB_NAME=mlflow
 
 MLFLOW_TRACKING_URI=postgresql+psycopg2://jobskill:jobskill@postgres:5432/mlflow
 MLFLOW_ARTIFACT_ROOT=/opt/airflow/project/mlartifacts
+MLFLOW_EXPERIMENT_NAME=jobskill-classifier
 
 AIRFLOW_JWT_SECRET=change_me
 AIRFLOW_API_SECRET_KEY=change_me
 AIRFLOW_FERNET_KEY=change_me
+
+MIN_TRAINING_ROWS=50
+MIN_CATEGORY_COUNT=2
+MAX_UNKNOWN_RATIO=0.5
+
+MIN_MODEL_ACCURACY=0.7
+MIN_MODEL_F1_WEIGHTED=0.7
 ```
 
 로컬 Python에서 직접 실행할 경우에는 `DB_HOST=localhost`로 변경합니다.
@@ -730,7 +806,11 @@ load_raw_jobs
     ↓
 preprocess_jobs
     ↓
+check_training_data
+    ↓
 train_model
+    ↓
+check_model_performance
     ↓
 batch_inference
 ```
@@ -738,11 +818,13 @@ batch_inference
 정상 상태 예시:
 
 ```text
-generate_sample_jobs  success
-load_raw_jobs         success
-preprocess_jobs       success
-train_model           success
-batch_inference       success
+generate_sample_jobs        success
+load_raw_jobs               success
+preprocess_jobs             success
+check_training_data         success
+train_model                 success
+check_model_performance     success
+batch_inference             success
 ```
 
 파이프라인 실행 후 PostgreSQL에는 아래 데이터가 저장됩니다.
@@ -795,7 +877,9 @@ Airflow 없이 개별 스크립트로 실행할 수도 있습니다.
 python scripts/generate_sample_jobs.py
 python src/ingestion/load_raw_jobs.py
 python src/preprocessing/preprocess_db.py
+python src/quality/check_training_data.py
 python src/training/train_baseline.py
+python src/quality/check_model_performance.py
 python src/inference/batch_inference.py
 ```
 
@@ -805,7 +889,9 @@ python src/inference/batch_inference.py
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/generate_sample_jobs.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/ingestion/load_raw_jobs.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/preprocessing/preprocess_db.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_training_data.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/training/train_baseline.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_performance.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/inference/batch_inference.py"
 ```
 
@@ -1340,6 +1426,80 @@ git push origin --force --tags
 
 노출된 secret은 폐기하고 새 값으로 교체합니다.
 
+### 11. 데이터 품질 체크 실패
+
+증상:
+
+```text
+check_training_data task failed
+```
+
+원인 예시:
+
+```text
+cleaned_job_posts 데이터 수 부족
+text_for_model 누락
+job_category 누락
+Unknown 라벨 비율 초과
+기술스택 추출 결과 없음
+```
+
+확인:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_training_data.py"
+```
+
+관련 환경변수:
+
+```env
+MIN_TRAINING_ROWS=50
+MIN_CATEGORY_COUNT=2
+MAX_UNKNOWN_RATIO=0.5
+```
+
+데이터 품질 기준을 통과하지 못하면 모델 학습을 중단합니다.
+
+### 12. 모델 성능 체크 실패
+
+증상:
+
+```text
+check_model_performance task failed
+```
+
+원인 예시:
+
+```text
+MLflow experiment 없음
+MLflow run 없음
+accuracy metric 없음
+f1_weighted metric 없음
+성능 기준 미달
+```
+
+확인:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_performance.py"
+```
+
+관련 환경변수:
+
+```env
+MLFLOW_EXPERIMENT_NAME=jobskill-classifier
+MIN_MODEL_ACCURACY=0.7
+MIN_MODEL_F1_WEIGHTED=0.7
+```
+
+실패 테스트:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && MIN_MODEL_ACCURACY=1.1 python src/quality/check_model_performance.py"
+```
+
+모델 성능 기준을 통과하지 못하면 batch inference를 중단합니다.
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -1356,6 +1516,9 @@ batch inference 결과를 PostgreSQL에 저장
 FastAPI 기반 단건 추론 API 구성
 Docker Compose 기반 MLOps 개발 환경 구성
 Git history에 포함된 secret 제거 및 secret rotation 수행
+데이터 품질 체크를 통한 학습 전 검증 로직 구성
+MLflow metric 기반 모델 성능 gate 구성
+기준 미달 데이터/모델이 후속 task로 넘어가지 않도록 DAG 제어
 ```
 
 ## 현재 완료된 범위
@@ -1363,9 +1526,11 @@ Git history에 포함된 secret 제거 및 secret rotation 수행
 ```text
 샘플 채용공고 데이터 생성
 PostgreSQL raw/cleaned/skills 테이블 저장
+전처리 결과 기반 데이터 품질 체크 추가
 TF-IDF + Logistic Regression 모델 학습
 MLflow PostgreSQL backend store 연동
 MLflow artifact 저장
+MLflow metric 기반 모델 성능 체크 추가
 FastAPI /predict API 구성
 model_predictions 테이블 저장 구조 추가
 batch inference 추가
@@ -1384,8 +1549,8 @@ README 실행 스크린샷 추가
 label_jobs.py 규칙 확장으로 Unknown 라벨 감소
 FastAPI 예측 결과 품질 확인 강화
 실제 채용공고 크롤러 추가
-데이터 품질 체크 task 추가
-모델 성능 기준 기반 등록 로직 추가
-Airflow DAG task를 BashOperator에서 PythonOperator 기반으로 개선 검토
+데이터 품질 체크 결과를 별도 테이블에 저장
+모델 성능 체크 결과를 별도 테이블에 저장
 MLflow model registry 또는 best model 관리 구조 추가
+Airflow DAG task를 BashOperator에서 PythonOperator 기반으로 개선 검토
 ```
