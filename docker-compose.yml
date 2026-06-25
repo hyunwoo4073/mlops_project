@@ -1,15 +1,159 @@
+x-airflow-common: &airflow-common
+  image: jobskill-airflow:3.2.2
+  env_file:
+    - .env
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}
+
+    AIRFLOW__API_AUTH__JWT_SECRET: REMOVED_AIRFLOW_JWT_SECRET
+    AIRFLOW__API__SECRET_KEY: REMOVED_AIRFLOW_API_SECRET_KEY
+    AIRFLOW__CORE__FERNET_KEY: REMOVED_AIRFLOW_FERNET_KEY=
+
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "1"
+    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
+    AIRFLOW__SIMPLE_AUTH_MANAGER__USERS: airflow:admin
+    AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json
+
+    PYTHONPATH: /opt/airflow/project
+
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/project/src
+    - ./scripts:/opt/airflow/project/scripts
+    - ./sql:/opt/airflow/project/sql
+    - ./data:/opt/airflow/project/data
+    - ./models:/opt/airflow/project/models
+    - ./mlartifacts:/opt/airflow/project/mlartifacts
+    - ./simple_auth_manager_passwords.json:/opt/airflow/simple_auth_manager_passwords.json
+     - ./airflow_logs:/opt/airflow/logs
+
+  working_dir: /opt/airflow/project
+
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+
 services:
   postgres:
     image: postgres:16
     container_name: jobskill-postgres
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     ports:
-      - "${DB_PORT}:5432"
+      - "5432:5432"
     volumes:
       - jobskill_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  airflow-image:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    image: jobskill-airflow:3.2.2
+    command: ["bash", "-c", "echo airflow image built"]
+
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: jobskill-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: jobskill-airflow-apiserver
+    command: airflow api-server
+    ports:
+      - "8080:8080"
+
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: jobskill-airflow-scheduler
+    command: airflow scheduler
+
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: jobskill-airflow-dag-processor
+    command: airflow dag-processor
+
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: jobskill-airflow-triggerer
+    command: airflow triggerer
+
+
+  mlflow:
+    image: jobskill-airflow:3.2.2
+    container_name: jobskill-mlflow
+    env_file:
+      - .env
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mlflow ui \
+          --backend-store-uri postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${MLFLOW_DB_NAME} \
+          --default-artifact-root /opt/airflow/project/mlartifacts \
+          --host 0.0.0.0 \
+          --port 5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlartifacts:/opt/airflow/project/mlartifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    image: jobskill-api:latest
+    container_name: jobskill-api
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   jobskill_pgdata:

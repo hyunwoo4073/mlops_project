@@ -97,8 +97,14 @@ def main():
 
     with engine.begin() as conn:
         # MVP 단계에서는 전처리 결과를 매번 새로 만든다.
-        conn.execute(text("DELETE FROM job_post_skills"))
-        conn.execute(text("DELETE FROM cleaned_job_posts"))
+        conn.execute(text("""
+            TRUNCATE TABLE
+                model_predictions,
+                job_post_skills,
+                cleaned_job_posts
+            RESTART IDENTITY
+            CASCADE
+        """))
 
         id_map = {}
 

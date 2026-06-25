@@ -174,8 +174,26 @@ def main():
         ]
     )
 
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("jobskill-classifier")
+    tracking_uri = os.getenv(
+        "MLFLOW_TRACKING_URI",
+        "postgresql+psycopg2://jobskill:jobskill@localhost:5432/mlflow",
+    )
+
+    artifact_root = os.getenv("MLFLOW_ARTIFACT_ROOT", "./mlartifacts")
+
+    mlflow.set_tracking_uri(tracking_uri)
+
+    experiment_name = "jobskill-classifier"
+
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+
+    if experiment is None:
+        mlflow.create_experiment(
+            name=experiment_name,
+            artifact_location=artifact_root,
+        )
+
+    mlflow.set_experiment(experiment_name)
 
     with mlflow.start_run():
         model.fit(X_train, y_train)
