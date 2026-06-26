@@ -6,18 +6,31 @@ import pandas as pd
 from sqlalchemy import text
 
 
+# project root를 PYTHONPATH에 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.common.db import get_engine
-
-
-MODEL_PATH = "models/job_classifier.pkl"
+from src.common.model_registry import get_current_model_metadata
 
 
 def main():
     engine = get_engine()
 
-    model = joblib.load(MODEL_PATH)
+    # 현재 사용할 모델 metadata 조회
+    # 우선순위:
+    # 1. model_registry에서 PROMOTED 상태인 모델
+    # 2. models/best/job_classifier.pkl
+    # 3. models/job_classifier.pkl
+    model_metadata = get_current_model_metadata()
+
+    print("\n[Inference Model]")
+    print(f"model_name        : {model_metadata.model_name}")
+    print(f"run_id            : {model_metadata.run_id}")
+    print(f"model_registry_id : {model_metadata.model_registry_id}")
+    print(f"model_path        : {model_metadata.model_path}")
+    print(f"status            : {model_metadata.status}")
+
+    model = joblib.load(model_metadata.model_path)
 
     query = """
         SELECT
@@ -51,8 +64,11 @@ def main():
         prediction_rows.append(
             {
                 "job_post_id": int(job_post_id),
-                "model_name": "tfidf_logistic_regression",
-                "model_version": "local",
+                "model_name": model_metadata.model_name,
+                "model_version": model_metadata.run_id or model_metadata.status,
+                "model_run_id": model_metadata.run_id,
+                "model_registry_id": model_metadata.model_registry_id,
+                "model_path": str(model_metadata.model_path),
                 "predicted_category": str(pred),
                 "confidence": float(confidence) if confidence is not None else None,
             }
@@ -63,6 +79,9 @@ def main():
             job_post_id,
             model_name,
             model_version,
+            model_run_id,
+            model_registry_id,
+            model_path,
             predicted_category,
             confidence
         )
@@ -70,6 +89,9 @@ def main():
             :job_post_id,
             :model_name,
             :model_version,
+            :model_run_id,
+            :model_registry_id,
+            :model_path,
             :predicted_category,
             :confidence
         )
@@ -80,7 +102,11 @@ def main():
         conn.execute(text("TRUNCATE TABLE model_predictions RESTART IDENTITY"))
         conn.execute(insert_sql, prediction_rows)
 
-    print(f"Inserted batch predictions: {len(prediction_rows)}")
+    print(f"\nInserted batch predictions: {len(prediction_rows)}")
+    print(f"model_name        : {model_metadata.model_name}")
+    print(f"model_run_id      : {model_metadata.run_id}")
+    print(f"model_registry_id : {model_metadata.model_registry_id}")
+    print(f"model_path        : {model_metadata.model_path}")
 
 
 if __name__ == "__main__":

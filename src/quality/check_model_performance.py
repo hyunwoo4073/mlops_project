@@ -5,6 +5,8 @@ import os
 import mlflow
 from mlflow.tracking import MlflowClient
 
+from sqlalchemy import create_engine
+from src.quality.check_logger import PipelineCheckLog, save_check_results
 
 def get_required_metric(metrics: dict, name: str) -> float:
     if name not in metrics:
@@ -17,6 +19,17 @@ def main() -> None:
     tracking_uri = os.getenv(
         "MLFLOW_TRACKING_URI",
         "postgresql+psycopg2://jobskill:jobskill@postgres:5432/mlflow",
+    )
+
+    db_host = os.getenv("DB_HOST", "postgres")
+    db_port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("DB_NAME", "jobskill")
+    db_user = os.getenv("DB_USER", "jobskill")
+    db_password = os.getenv("DB_PASSWORD", "jobskill")
+
+    database_url = (
+        f"postgresql+psycopg2://{db_user}:{db_password}"
+        f"@{db_host}:{db_port}/{db_name}"
     )
 
     experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "jobskill-classifier")
@@ -69,6 +82,37 @@ def main() -> None:
         failed_checks.append(
             f"f1_weighted={f1_weighted:.4f} < required={min_f1_weighted:.4f}"
         )
+
+    check_logs = [
+        PipelineCheckLog(
+            check_type="MODEL_PERFORMANCE",
+            check_name="accuracy",
+            status="PASS" if accuracy >= min_accuracy else "FAIL",
+            metric_value=accuracy,
+            threshold_value=min_accuracy,
+            message=(
+                f"accuracy={accuracy:.4f}, "
+                f"required>={min_accuracy:.4f}, "
+                f"run_id={run_id}"
+            ),
+        ),
+        PipelineCheckLog(
+            check_type="MODEL_PERFORMANCE",
+            check_name="f1_weighted",
+            status="PASS" if f1_weighted >= min_f1_weighted else "FAIL",
+            metric_value=f1_weighted,
+            threshold_value=min_f1_weighted,
+            message=(
+                f"f1_weighted={f1_weighted:.4f}, "
+                f"required>={min_f1_weighted:.4f}, "
+                f"run_id={run_id}"
+            ),
+        ),
+    ]
+
+    engine = create_engine(database_url)
+    with engine.begin() as conn:
+        save_check_results(conn, check_logs)
 
     if failed_checks:
         print("\n[Failed Model Checks]")
