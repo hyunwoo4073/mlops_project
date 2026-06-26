@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 
 from sqlalchemy import create_engine, text
-
+from src.quality.check_logger import PipelineCheckLog, save_check_results
 
 @dataclass
 class CheckResult:
@@ -182,6 +182,25 @@ def main() -> None:
 
         if not result.passed:
             failed_results.append(result)
+
+    check_logs: list[PipelineCheckLog] = []
+
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+
+        check_logs.append(
+            PipelineCheckLog(
+                check_type="DATA_QUALITY",
+                check_name=result.name,
+                status=status,
+                metric_value=None,
+                threshold_value=None,
+                message=result.message,
+            )
+        )
+
+    with engine.begin() as conn:
+        save_check_results(conn, check_logs)
 
     if failed_results:
         print("\n[Failed Checks]")

@@ -1,10 +1,12 @@
 # jobskill-mlops project
 
-채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 생성, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 일괄 예측, API 추론까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
+채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 생성, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
+
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 리로드까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 프로젝트 목표
 
-이 프로젝트는 채용공고 데이터를 사용해 아래 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 채용공고 데이터를 사용해 아래 흐름을 구성합니다.
 
 ```text
 샘플 채용공고 데이터 생성
@@ -12,13 +14,19 @@
 → 텍스트 정제 / 직무 라벨링 / 기술스택 추출
 → PostgreSQL cleaned / skills 테이블 저장
 → 학습 데이터 품질 체크
+→ 검증 결과 저장
 → TF-IDF + Logistic Regression 모델 학습
 → MLflow 실험 기록
 → 모델 artifact 저장
 → 모델 성능 기준 체크
-→ batch inference 실행
+→ 성능 검증 결과 저장
+→ best model promotion
+→ model_registry 저장
+→ promoted model 기반 batch inference
 → model_predictions 테이블 저장
+→ prediction lineage 저장
 → FastAPI 단건 예측
+→ FastAPI serving model 자동 reload
 → Airflow DAG로 전체 파이프라인 실행
 ```
 
@@ -30,14 +38,27 @@ flowchart LR
     B --> C[Preprocessing]
     C --> D[cleaned_job_posts]
     C --> E[job_post_skills]
+
     D --> Q1[Data Quality Check]
+    Q1 --> QR[pipeline_check_results]
+
     Q1 --> F[Train Model]
     F --> G[MLflow Tracking]
     F --> H[models/job_classifier.pkl]
+
     G --> Q2[Model Performance Check]
-    Q2 --> I[Batch Inference]
+    Q2 --> QR
+
+    Q2 --> P[Promote Model]
+    P --> MR[model_registry]
+    P --> BM[models/best/job_classifier.pkl]
+
+    MR --> I[Batch Inference]
+    BM --> I
     I --> J[model_predictions]
-    H --> K[FastAPI /predict]
+
+    MR --> K[FastAPI /predict]
+    BM --> K
     K --> J
 
     subgraph Orchestration
@@ -50,6 +71,7 @@ flowchart LR
     L --> Q1
     L --> F
     L --> Q2
+    L --> P
     L --> I
 ```
 
@@ -58,7 +80,7 @@ flowchart LR
 ```text
 Docker Compose
 ├── PostgreSQL
-│   ├── jobskill DB  : 프로젝트 데이터 저장
+│   ├── jobskill DB  : 프로젝트 데이터 / 예측 / 검증 / 모델 registry 저장
 │   ├── airflow DB   : Airflow 메타데이터 저장
 │   └── mlflow DB    : MLflow 실험/런 메타데이터 저장
 ├── Airflow 3.x
@@ -70,7 +92,9 @@ Docker Compose
 │   ├── backend store  : PostgreSQL mlflow DB
 │   └── artifact store : ./mlartifacts
 └── FastAPI
-    └── /predict API
+    ├── /predict
+    ├── /model
+    └── /reload-model
 ```
 
 ## 기술 스택
@@ -112,7 +136,8 @@ Container       : Docker Compose
 │   └── generate_sample_jobs.py
 ├── src/
 │   ├── common/
-│   │   └── db.py
+│   │   ├── db.py
+│   │   └── model_registry.py
 │   ├── ingestion/
 │   │   └── load_raw_jobs.py
 │   ├── preprocessing/
@@ -121,10 +146,12 @@ Container       : Docker Compose
 │   │   ├── label_jobs.py
 │   │   └── preprocess_db.py
 │   ├── quality/
+│   │   ├── check_logger.py
 │   │   ├── check_training_data.py
 │   │   └── check_model_performance.py
 │   ├── training/
-│   │   └── train_baseline.py
+│   │   ├── train_baseline.py
+│   │   └── promote_model.py
 │   └── inference/
 │       ├── api.py
 │       └── batch_inference.py
@@ -132,6 +159,7 @@ Container       : Docker Compose
 │   ├── raw/
 │   └── processed/
 ├── models/
+│   └── best/
 ├── mlartifacts/
 ├── airflow_logs/
 ├── docs/
@@ -234,7 +262,37 @@ train_model
 
 데이터 품질 기준을 통과하지 못하면 DAG를 실패시켜, 부적절한 데이터로 모델 학습이 진행되지 않도록 합니다.
 
-### 5. 모델 학습
+### 5. 검증 결과 저장
+
+`src/quality/check_logger.py`
+
+데이터 품질 체크와 모델 성능 체크 결과를 PostgreSQL의 `pipeline_check_results` 테이블에 저장합니다.
+
+저장 대상:
+
+```text
+DATA_QUALITY
+MODEL_PERFORMANCE
+```
+
+저장 컬럼:
+
+```text
+check_type
+check_name
+status
+metric_value
+threshold_value
+message
+dag_id
+task_id
+run_id
+checked_at
+```
+
+이를 통해 Airflow DAG 실행 시점마다 어떤 검증 항목이 통과 또는 실패했는지 추적할 수 있습니다.
+
+### 6. 모델 학습
 
 `src/training/train_baseline.py`
 
@@ -255,7 +313,7 @@ MLflow experiment/run 기록
 MLflow model artifact 저장
 ```
 
-### 6. 모델 성능 체크
+### 7. 모델 성능 체크
 
 `src/quality/check_model_performance.py`
 
@@ -268,47 +326,123 @@ accuracy >= MIN_MODEL_ACCURACY
 f1_weighted >= MIN_MODEL_F1_WEIGHTED
 ```
 
-Airflow DAG에서는 `train_model` 이후, `batch_inference` 이전에 실행됩니다.
+Airflow DAG에서는 `train_model` 이후, `promote_model` 이전에 실행됩니다.
 
 ```text
 train_model
     ↓
 check_model_performance
     ↓
+promote_model
+```
+
+모델 성능이 기준보다 낮으면 DAG를 실패시켜, 낮은 품질의 모델이 promotion 또는 batch inference 단계로 넘어가지 않도록 합니다.
+
+### 8. 모델 승격
+
+`src/training/promote_model.py`
+
+MLflow에 기록된 최신 학습 run의 성능을 기준으로 기존 best model과 비교합니다.
+
+승격 조건:
+
+```text
+기존 promoted model이 없는 경우
+또는 최신 모델의 f1_weighted가 기존 best model보다 높은 경우
+또는 f1_weighted가 같고 accuracy가 더 높은 경우
+```
+
+승격된 모델은 아래 경로에 저장됩니다.
+
+```text
+models/best/job_classifier.pkl
+```
+
+승격 결과는 PostgreSQL의 `model_registry` 테이블에 저장됩니다.
+
+```text
+PROMOTED
+REJECTED
+```
+
+Airflow DAG에서는 `check_model_performance` 이후, `batch_inference` 이전에 실행됩니다.
+
+```text
+check_model_performance
+    ↓
+promote_model
+    ↓
 batch_inference
 ```
 
-모델 성능이 기준보다 낮으면 DAG를 실패시켜, 낮은 품질의 모델로 batch inference가 수행되지 않도록 합니다.
+이를 통해 기준 미달 모델이나 기존 best보다 낮은 성능의 모델이 추론 단계에 사용되지 않도록 제어합니다.
 
-### 7. Batch Inference
+### 9. Prediction Lineage
+
+`src/common/model_registry.py`
+
+batch inference와 FastAPI 예측은 `model_registry`에서 현재 PROMOTED 상태의 모델 metadata를 조회합니다.
+
+예측 결과에는 아래 모델 정보를 함께 저장합니다.
+
+```text
+model_name
+model_version
+model_run_id
+model_registry_id
+model_path
+```
+
+이를 통해 `model_predictions`의 각 예측 결과가 어떤 MLflow run과 어떤 promoted model에서 생성되었는지 추적할 수 있습니다.
+
+```text
+model_registry
+    ↓
+model_predictions
+```
+
+### 10. Batch Inference
 
 `src/inference/batch_inference.py`
 
-학습된 모델을 이용해 `cleaned_job_posts` 전체 데이터에 대해 일괄 예측을 수행하고, 결과를 `model_predictions` 테이블에 저장합니다.
+현재 promoted model을 이용해 `cleaned_job_posts` 전체 데이터에 대해 일괄 예측을 수행하고, 결과를 `model_predictions` 테이블에 저장합니다.
 
 ```text
 cleaned_job_posts
-→ model predict
+→ promoted model predict
 → model_predictions 저장
 ```
 
-### 8. FastAPI
+batch inference 결과에는 예측값뿐 아니라 model lineage도 함께 저장됩니다.
+
+### 11. FastAPI
 
 `src/inference/api.py`
 
-학습된 모델을 로드해 단건 예측 API를 제공합니다.
+현재 promoted model을 로드해 단건 예측 API를 제공합니다.
 
 주요 기능:
 
 ```text
+GET  /
+GET  /model
+POST /reload-model
 POST /predict
-→ 직무 카테고리 예측
-→ confidence 반환
-→ 기술스택 추출
-→ model_predictions 테이블 저장
 ```
 
-### 9. Airflow DAG
+`/predict`는 아래 작업을 수행합니다.
+
+```text
+직무 카테고리 예측
+confidence 반환
+기술스택 추출
+model_predictions 테이블 저장
+model lineage 저장
+```
+
+FastAPI는 시작 시점에 모델을 로드하며, 요청 시점에 현재 promoted model metadata를 확인합니다. 모델 파일 또는 registry 정보가 변경되면 새 모델을 자동으로 reload합니다.
+
+### 12. Airflow DAG
 
 `dags/jobskill_pipeline_dag.py`
 
@@ -327,6 +461,8 @@ train_model
     ↓
 check_model_performance
     ↓
+promote_model
+    ↓
 batch_inference
 ```
 
@@ -338,13 +474,15 @@ jobskill_mlops_pipeline
 
 ## PostgreSQL 테이블
 
-현재 사용하는 테이블은 4개입니다.
+현재 사용하는 주요 테이블은 아래와 같습니다.
 
 ```text
 raw_job_posts
 cleaned_job_posts
 job_post_skills
 model_predictions
+pipeline_check_results
+model_registry
 ```
 
 역할:
@@ -363,6 +501,15 @@ job_post_skills
 
 model_predictions
 - FastAPI 또는 batch inference 예측 결과 저장
+- 예측에 사용된 모델 lineage 저장
+
+pipeline_check_results
+- 데이터 품질 체크 결과 저장
+- 모델 성능 체크 결과 저장
+
+model_registry
+- MLflow run 기반 모델 승격 결과 저장
+- promoted / rejected 모델 이력 관리
 ```
 
 FK 관계:
@@ -372,6 +519,10 @@ cleaned_job_posts
     ↑
     ├── job_post_skills.job_post_id
     └── model_predictions.job_post_id
+
+model_registry
+    ↑
+    └── model_predictions.model_registry_id
 ```
 
 ## 환경 변수
@@ -397,6 +548,10 @@ MLFLOW_DB_NAME=mlflow
 MLFLOW_TRACKING_URI=postgresql+psycopg2://jobskill:jobskill@postgres:5432/mlflow
 MLFLOW_ARTIFACT_ROOT=/opt/airflow/project/mlartifacts
 MLFLOW_EXPERIMENT_NAME=jobskill-classifier
+
+MODEL_NAME=job_classifier
+MODEL_PATH=models/job_classifier.pkl
+BEST_MODEL_PATH=models/best/job_classifier.pkl
 
 AIRFLOW_JWT_SECRET=change_me
 AIRFLOW_API_SECRET_KEY=change_me
@@ -492,7 +647,7 @@ Airflow 3.x에서는 scheduler가 task 실행 상태를 `airflow-apiserver`의 e
 AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
 ```
 
-이 값은 컨테이너 내부 통신 기준입니다.
+이 값은 컨테이너 내부 통신 기준입니다.  
 따라서 호스트 포트를 `8081:8080`으로 변경하더라도 execution API URL은 `8080`을 유지해야 합니다.
 
 ```text
@@ -506,7 +661,7 @@ AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution
 Invalid auth token: Signature verification failed
 ```
 
-이를 방지하기 위해 Airflow 공통 환경변수에 secret 값을 고정합니다.
+이를 방지하기 위해 Airflow 공통 환경변수에 secret 값을 고정합니다.  
 단, 실제 secret 값은 Git에 올리지 않고 `.env`에서만 관리합니다.
 
 ```yaml
@@ -654,7 +809,7 @@ airflow-triggerer:
 ### 1. 필요한 디렉터리 생성
 
 ```bash
-mkdir -p data/raw data/processed models mlartifacts airflow_logs
+mkdir -p data/raw data/processed models/best mlartifacts airflow_logs
 ```
 
 ### 2. Airflow 이미지 빌드
@@ -677,7 +832,7 @@ docker compose up -d postgres
 
 ### 5. DB 생성 확인 또는 생성
 
-PostgreSQL volume이 이미 존재하는 경우 init SQL이 다시 실행되지 않을 수 있습니다.
+PostgreSQL volume이 이미 존재하는 경우 init SQL이 다시 실행되지 않을 수 있습니다.  
 그 경우 아래 명령으로 직접 DB를 생성합니다.
 
 ```bash
@@ -812,6 +967,8 @@ train_model
     ↓
 check_model_performance
     ↓
+promote_model
+    ↓
 batch_inference
 ```
 
@@ -824,15 +981,18 @@ preprocess_jobs             success
 check_training_data         success
 train_model                 success
 check_model_performance     success
+promote_model               success
 batch_inference             success
 ```
 
-파이프라인 실행 후 PostgreSQL에는 아래 데이터가 저장됩니다.
+파이프라인 실행 후 PostgreSQL에는 데이터, 검증 결과, 모델 승격 결과, 예측 결과가 저장됩니다.
 
 ```sql
 SELECT COUNT(*) FROM raw_job_posts;
 SELECT COUNT(*) FROM cleaned_job_posts;
 SELECT COUNT(*) FROM job_post_skills;
+SELECT COUNT(*) FROM pipeline_check_results;
+SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
 ```
 
@@ -845,16 +1005,56 @@ GROUP BY job_category
 ORDER BY job_category;
 ```
 
-예측 결과 확인:
+검증 결과 확인:
 
 ```sql
 SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    message,
+    checked_at
+FROM pipeline_check_results
+ORDER BY id DESC
+LIMIT 20;
+```
+
+모델 registry 확인:
+
+```sql
+SELECT
+    id,
+    model_name,
+    run_id,
+    accuracy,
+    f1_weighted,
+    status,
+    promoted_model_path,
+    created_at
+FROM model_registry
+ORDER BY id DESC
+LIMIT 10;
+```
+
+예측 결과와 model lineage 확인:
+
+```sql
+SELECT
+    id,
+    job_post_id,
     predicted_category,
-    COUNT(*) AS cnt,
-    ROUND(AVG(confidence)::numeric, 4) AS avg_confidence
+    ROUND(confidence::numeric, 4) AS confidence,
+    model_name,
+    model_version,
+    model_run_id,
+    model_registry_id,
+    model_path,
+    predicted_at
 FROM model_predictions
-GROUP BY predicted_category
-ORDER BY predicted_category;
+ORDER BY id DESC
+LIMIT 10;
 ```
 
 MLflow에서는 모델 학습 run, metric, artifact 저장 여부를 확인합니다.
@@ -880,6 +1080,7 @@ python src/preprocessing/preprocess_db.py
 python src/quality/check_training_data.py
 python src/training/train_baseline.py
 python src/quality/check_model_performance.py
+python src/training/promote_model.py
 python src/inference/batch_inference.py
 ```
 
@@ -892,6 +1093,7 @@ docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytho
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_training_data.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/training/train_baseline.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_performance.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/training/promote_model.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/inference/batch_inference.py"
 ```
 
@@ -915,6 +1117,27 @@ API 문서:
 http://localhost:8000/docs
 ```
 
+### API 엔드포인트
+
+```text
+GET  /
+GET  /model
+POST /reload-model
+POST /predict
+```
+
+모델 정보 확인:
+
+```bash
+curl http://localhost:8000/model
+```
+
+모델 강제 reload:
+
+```bash
+curl -X POST http://localhost:8000/reload-model
+```
+
 예시 요청:
 
 ```json
@@ -922,17 +1145,6 @@ http://localhost:8000/docs
   "title": "데이터 엔지니어 채용",
   "description": "Python SQL Airflow Kafka Spark 기반 데이터 파이프라인 개발자를 찾습니다.",
   "job_post_id": null
-}
-```
-
-예시 응답:
-
-```json
-{
-  "job_category": "Data Engineer",
-  "confidence": 0.91,
-  "skills": ["Airflow", "Kafka", "Python", "Spark", "SQL"],
-  "prediction_id": 1
 }
 ```
 
@@ -946,6 +1158,21 @@ curl -X POST "http://localhost:8000/predict" \
     "description": "Python SQL Airflow Kafka Spark 기반 데이터 파이프라인 개발자를 찾습니다.",
     "job_post_id": null
   }'
+```
+
+예시 응답:
+
+```json
+{
+  "job_category": "Data Engineer",
+  "confidence": 0.91,
+  "skills": ["Airflow", "Kafka", "Python", "Spark", "SQL"],
+  "prediction_id": 1,
+  "model_name": "job_classifier",
+  "model_run_id": "472340fc8ca14b50a382dd46f61108bf",
+  "model_registry_id": 1,
+  "model_path": "models/best/job_classifier.pkl"
+}
 ```
 
 ## PostgreSQL 확인 명령어
@@ -968,6 +1195,8 @@ docker exec -it jobskill-postgres psql -U jobskill -d jobskill
 SELECT COUNT(*) FROM raw_job_posts;
 SELECT COUNT(*) FROM cleaned_job_posts;
 SELECT COUNT(*) FROM job_post_skills;
+SELECT COUNT(*) FROM pipeline_check_results;
+SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
 ```
 
@@ -990,6 +1219,39 @@ ORDER BY COUNT(*) DESC
 LIMIT 20;
 ```
 
+검증 결과 확인:
+
+```sql
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    message,
+    checked_at
+FROM pipeline_check_results
+ORDER BY id DESC
+LIMIT 20;
+```
+
+모델 registry 확인:
+
+```sql
+SELECT
+    id,
+    model_name,
+    run_id,
+    accuracy,
+    f1_weighted,
+    status,
+    promoted_model_path,
+    created_at
+FROM model_registry
+ORDER BY id DESC
+LIMIT 10;
+```
+
 예측 결과 확인:
 
 ```sql
@@ -1002,6 +1264,29 @@ GROUP BY predicted_category
 ORDER BY predicted_category;
 ```
 
+예측 결과와 model lineage 확인:
+
+```sql
+SELECT
+    mp.id,
+    mp.job_post_id,
+    mp.predicted_category,
+    ROUND(mp.confidence::numeric, 4) AS confidence,
+    mp.model_name,
+    mp.model_version,
+    mp.model_run_id,
+    mp.model_registry_id,
+    mr.status AS registry_status,
+    mr.f1_weighted,
+    mp.model_path,
+    mp.predicted_at
+FROM model_predictions mp
+LEFT JOIN model_registry mr
+    ON mp.model_registry_id = mr.id
+ORDER BY mp.id DESC
+LIMIT 20;
+```
+
 라벨과 예측 결과 비교:
 
 ```sql
@@ -1011,6 +1296,8 @@ SELECT
     cjp.job_category AS rule_label,
     mp.predicted_category,
     ROUND(mp.confidence::numeric, 4) AS confidence,
+    mp.model_name,
+    mp.model_run_id,
     mp.predicted_at
 FROM model_predictions mp
 JOIN cleaned_job_posts cjp
@@ -1065,7 +1352,10 @@ docs/images/
 ├── mlflow-run-metrics.png
 ├── mlflow-artifacts.png
 ├── fastapi-docs.png
-└── postgres-query-result.png
+├── api-model-info.png
+├── postgres-check-results.png
+├── postgres-model-registry.png
+└── postgres-prediction-lineage.png
 ```
 
 README 예시:
@@ -1082,6 +1372,14 @@ README 예시:
 ### FastAPI Docs
 
 ![FastAPI Docs](docs/images/fastapi-docs.png)
+
+### Model Registry
+
+![Model Registry](docs/images/postgres-model-registry.png)
+
+### Prediction Lineage
+
+![Prediction Lineage](docs/images/postgres-prediction-lineage.png)
 ```
 
 ## Git 제외 대상
@@ -1498,7 +1796,89 @@ MIN_MODEL_F1_WEIGHTED=0.7
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && MIN_MODEL_ACCURACY=1.1 python src/quality/check_model_performance.py"
 ```
 
-모델 성능 기준을 통과하지 못하면 batch inference를 중단합니다.
+모델 성능 기준을 통과하지 못하면 promotion과 batch inference를 중단합니다.
+
+### 13. Batch inference 입력 데이터 없음
+
+증상:
+
+```text
+ValueError: No cleaned job posts found. Run preprocess_db.py first.
+```
+
+원인:
+
+```text
+cleaned_job_posts에 text_for_model이 있는 데이터가 없음
+batch_inference를 전처리 없이 단독 실행함
+```
+
+확인:
+
+```bash
+docker exec -it jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    COUNT(*) AS cleaned_count,
+    COUNT(text_for_model) AS text_not_null_count
+FROM cleaned_job_posts;
+"
+```
+
+해결:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/preprocessing/preprocess_db.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_training_data.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/inference/batch_inference.py"
+```
+
+또는 전체 DAG를 다시 실행합니다.
+
+```bash
+docker compose exec airflow-scheduler airflow dags trigger jobskill_mlops_pipeline
+```
+
+### 14. 모델 승격 결과 확인
+
+모델 promotion 결과는 `model_registry` 테이블에서 확인합니다.
+
+```bash
+docker exec -it jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    model_name,
+    run_id,
+    accuracy,
+    f1_weighted,
+    status,
+    message,
+    created_at
+FROM model_registry
+ORDER BY id DESC
+LIMIT 10;
+"
+```
+
+같은 성능의 모델을 반복 실행하면 `REJECTED`가 나올 수 있습니다. 이는 기존 best model보다 성능이 개선되지 않았다는 의미이므로 정상 동작입니다.
+
+### 15. API 모델 reload 확인
+
+현재 API가 사용하는 모델 정보는 `/model`에서 확인합니다.
+
+```bash
+curl http://localhost:8000/model
+```
+
+강제로 reload하려면 아래 API를 호출합니다.
+
+```bash
+curl -X POST http://localhost:8000/reload-model
+```
+
+예측 시점에 promoted model 정보가 바뀌면 API는 새 모델을 reload합니다. reload 로그는 API 컨테이너 로그에서 확인할 수 있습니다.
+
+```bash
+docker compose logs --tail=100 api
+```
 
 ## What I Learned
 
@@ -1512,13 +1892,17 @@ LocalExecutor 기반 task 실행 구조 확인
 PostgreSQL을 서비스 DB, Airflow metadata DB, MLflow backend store로 분리 구성
 MLflow backend store와 artifact store 분리
 scikit-learn 모델 학습 결과를 MLflow에 기록
-batch inference 결과를 PostgreSQL에 저장
-FastAPI 기반 단건 추론 API 구성
-Docker Compose 기반 MLOps 개발 환경 구성
-Git history에 포함된 secret 제거 및 secret rotation 수행
 데이터 품질 체크를 통한 학습 전 검증 로직 구성
 MLflow metric 기반 모델 성능 gate 구성
+데이터 품질/모델 성능 검증 결과를 PostgreSQL에 저장
 기준 미달 데이터/모델이 후속 task로 넘어가지 않도록 DAG 제어
+기존 best model과 신규 학습 모델의 성능 비교 및 promotion 로직 구성
+promoted model 기반 batch inference 구성
+FastAPI 기반 단건 추론 API 구성
+FastAPI serving model 자동 reload 구성
+예측 결과에 model lineage를 저장해 추적 가능성 확보
+Docker Compose 기반 MLOps 개발 환경 구성
+Git history에 포함된 secret 제거 및 secret rotation 수행
 ```
 
 ## 현재 완료된 범위
@@ -1527,13 +1911,21 @@ MLflow metric 기반 모델 성능 gate 구성
 샘플 채용공고 데이터 생성
 PostgreSQL raw/cleaned/skills 테이블 저장
 전처리 결과 기반 데이터 품질 체크 추가
+데이터 품질 체크 결과 저장 테이블 추가
 TF-IDF + Logistic Regression 모델 학습
 MLflow PostgreSQL backend store 연동
 MLflow artifact 저장
 MLflow metric 기반 모델 성능 체크 추가
+모델 성능 체크 결과 저장 테이블 추가
+best model promotion 로직 추가
+model_registry 테이블 추가
+promoted model 기반 batch inference 추가
+prediction lineage 저장 구조 추가
 FastAPI /predict API 구성
-model_predictions 테이블 저장 구조 추가
-batch inference 추가
+FastAPI /model API 추가
+FastAPI /reload-model API 추가
+FastAPI serving model 자동 reload 추가
+model_predictions 테이블 저장 구조 확장
 Airflow 3.x Docker Compose 구성
 Airflow execution API / JWT 설정 이슈 해결
 Airflow DAG 전체 실행 검증
@@ -1549,8 +1941,7 @@ README 실행 스크린샷 추가
 label_jobs.py 규칙 확장으로 Unknown 라벨 감소
 FastAPI 예측 결과 품질 확인 강화
 실제 채용공고 크롤러 추가
-데이터 품질 체크 결과를 별도 테이블에 저장
-모델 성능 체크 결과를 별도 테이블에 저장
-MLflow model registry 또는 best model 관리 구조 추가
+모델 registry / prediction lineage 기반 리포트 쿼리 추가
 Airflow DAG task를 BashOperator에서 PythonOperator 기반으로 개선 검토
+테스트 코드 추가
 ```

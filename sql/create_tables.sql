@@ -46,3 +46,84 @@ CREATE TABLE model_predictions (
     confidence FLOAT,
     predicted_at TIMESTAMP DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS pipeline_check_results (
+    id BIGSERIAL PRIMARY KEY,
+
+    check_type VARCHAR(50) NOT NULL,
+    check_name VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+
+    metric_value DOUBLE PRECISION,
+    threshold_value DOUBLE PRECISION,
+    message TEXT,
+
+    dag_id VARCHAR(250),
+    task_id VARCHAR(250),
+    run_id VARCHAR(250),
+
+    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_check_results_type
+ON pipeline_check_results(check_type);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_check_results_status
+ON pipeline_check_results(status);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_check_results_run_id
+ON pipeline_check_results(run_id);
+
+CREATE TABLE IF NOT EXISTS model_registry (
+    id BIGSERIAL PRIMARY KEY,
+
+    model_name VARCHAR(100) NOT NULL,
+    run_id VARCHAR(250),
+    experiment_name VARCHAR(250),
+
+    accuracy DOUBLE PRECISION,
+    f1_weighted DOUBLE PRECISION,
+
+    model_path TEXT,
+    promoted_model_path TEXT,
+
+    status VARCHAR(30) NOT NULL,
+    message TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_registry_model_name
+ON model_registry(model_name);
+
+CREATE INDEX IF NOT EXISTS idx_model_registry_status
+ON model_registry(status);
+
+CREATE INDEX IF NOT EXISTS idx_model_registry_created_at
+ON model_registry(created_at);
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS model_name VARCHAR(100);
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS model_run_id VARCHAR(250);
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS model_registry_id BIGINT;
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS model_path TEXT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_model_predictions_model_registry'
+    ) THEN
+        ALTER TABLE model_predictions
+        ADD CONSTRAINT fk_model_predictions_model_registry
+        FOREIGN KEY (model_registry_id)
+        REFERENCES model_registry(id);
+    END IF;
+END $$;

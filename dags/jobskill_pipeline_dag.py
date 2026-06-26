@@ -60,5 +60,19 @@ with DAG(
         task_id="check_model_performance",
         bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/quality/check_model_performance.py",
     )
+
+    promote_model = BashOperator(
+        task_id="promote_model",
+        bash_command=f"cd {PROJECT_ROOT} && {PYTHON_BIN} src/training/promote_model.py",
+    )
     
-    generate_sample_jobs >> load_raw_jobs >> preprocess_jobs >> check_training_data >> train_model >> batch_inference
+    (
+        generate_sample_jobs
+        >> load_raw_jobs
+        >> preprocess_jobs
+        >> check_training_data
+        >> train_model
+        >> check_model_performance
+        >> promote_model
+        >> batch_inference
+    )
