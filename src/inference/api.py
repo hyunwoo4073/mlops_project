@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from sqlalchemy import text
 
+import json
+from src.common.prediction_quality import build_prediction_quality
 
 # 프로젝트 루트를 import path에 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -87,6 +89,9 @@ class PredictRequest(BaseModel):
 class PredictResponse(BaseModel):
     job_category: str
     confidence: float | None
+    confidence_level: str | None = None
+    is_low_confidence: bool | None = None
+    top_predictions: list[dict] = []
     skills: list[str]
     prediction_id: int | None
     model_name: str | None = None
@@ -152,9 +157,8 @@ def predict(req: PredictRequest):
 
     pred = model.predict([text_for_model])[0]
 
-    confidence = None
-    if hasattr(model, "predict_proba"):
-        confidence = float(model.predict_proba([text_for_model])[0].max())
+    quality = build_prediction_quality(model, [text_for_model])[0]
+    confidence = quality.confidence
 
     skills = extract_skills(text_for_model)
 
@@ -167,7 +171,10 @@ def predict(req: PredictRequest):
             model_registry_id,
             model_path,
             predicted_category,
-            confidence
+            confidence,
+            confidence_level,
+            is_low_confidence,
+            top_predictions
         )
         VALUES (
             :job_post_id,
@@ -177,11 +184,13 @@ def predict(req: PredictRequest):
             :model_registry_id,
             :model_path,
             :predicted_category,
-            :confidence
+            :confidence,
+            :confidence_level,
+            :is_low_confidence,
+            CAST(:top_predictions AS jsonb)
         )
         RETURNING id
     """)
-
     with engine.begin() as conn:
         result = conn.execute(
             insert_sql,
@@ -194,7 +203,10 @@ def predict(req: PredictRequest):
                 "model_path": str(metadata.model_path),
                 "predicted_category": str(pred),
                 "confidence": confidence,
-            },
+                "confidence_level": quality.confidence_level,
+                "is_low_confidence": quality.is_low_confidence,
+                "top_predictions": json.dumps(quality.top_predictions, ensure_ascii=False),
+            }
         )
 
         prediction_id = result.scalar_one()
@@ -202,6 +214,9 @@ def predict(req: PredictRequest):
     return {
         "job_category": str(pred),
         "confidence": confidence,
+        "confidence_level": quality.confidence_level,
+        "is_low_confidence": quality.is_low_confidence,
+        "top_predictions": quality.top_predictions,
         "skills": skills,
         "prediction_id": prediction_id,
         "model_name": metadata.model_name,
