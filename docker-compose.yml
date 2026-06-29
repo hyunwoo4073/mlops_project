@@ -34,7 +34,8 @@ x-airflow-common: &airflow-common
     - ./models:/opt/airflow/project/models
     - ./mlartifacts:/opt/airflow/project/mlartifacts
     - ./simple_auth_manager_passwords.json:/opt/airflow/simple_auth_manager_passwords.json
-     - ./airflow_logs:/opt/airflow/logs
+    - ./reports:/opt/airflow/project/reports
+    - ./airflow_logs:/opt/airflow/logs
 
   working_dir: /opt/airflow/project
 

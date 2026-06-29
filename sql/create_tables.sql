@@ -127,3 +127,12 @@ BEGIN
         REFERENCES model_registry(id);
     END IF;
 END $$;
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS confidence_level VARCHAR(20);
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS is_low_confidence BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS top_predictions JSONB;

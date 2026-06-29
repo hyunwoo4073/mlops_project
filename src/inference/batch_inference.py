@@ -5,6 +5,8 @@ import joblib
 import pandas as pd
 from sqlalchemy import text
 
+import json
+from src.common.prediction_quality import build_prediction_quality
 
 # project root를 PYTHONPATH에 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -49,17 +51,14 @@ def main():
 
     preds = model.predict(texts)
 
-    confidences = [None] * len(preds)
-    if hasattr(model, "predict_proba"):
-        probas = model.predict_proba(texts)
-        confidences = probas.max(axis=1).tolist()
+    qualities = build_prediction_quality(model, texts)
 
     prediction_rows = []
 
-    for job_post_id, pred, confidence in zip(
-        df["job_post_id"].tolist(),
-        preds,
-        confidences,
+    for job_post_id, pred, quality in zip(
+    df["job_post_id"].tolist(),
+    preds,
+    qualities,
     ):
         prediction_rows.append(
             {
@@ -70,7 +69,10 @@ def main():
                 "model_registry_id": model_metadata.model_registry_id,
                 "model_path": str(model_metadata.model_path),
                 "predicted_category": str(pred),
-                "confidence": float(confidence) if confidence is not None else None,
+                "confidence": quality.confidence,
+                "confidence_level": quality.confidence_level,
+                "is_low_confidence": quality.is_low_confidence,
+                "top_predictions": json.dumps(quality.top_predictions, ensure_ascii=False),
             }
         )
 
