@@ -136,3 +136,26 @@ ADD COLUMN IF NOT EXISTS is_low_confidence BOOLEAN DEFAULT FALSE;
 
 ALTER TABLE model_predictions
 ADD COLUMN IF NOT EXISTS top_predictions JSONB;
+
+ALTER TABLE raw_job_posts
+ADD COLUMN IF NOT EXISTS external_id VARCHAR(250);
+
+ALTER TABLE raw_job_posts
+ADD COLUMN IF NOT EXISTS source VARCHAR(100);
+
+ALTER TABLE raw_job_posts
+ADD COLUMN IF NOT EXISTS source_url TEXT;
+
+ALTER TABLE raw_job_posts
+ADD COLUMN IF NOT EXISTS tags TEXT;
+
+ALTER TABLE raw_job_posts
+ADD COLUMN IF NOT EXISTS crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_job_posts_source_external_id
+ON raw_job_posts(source, external_id)
+WHERE source IS NOT NULL
+  AND external_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_job_posts_source_source_job_id
+ON raw_job_posts(source, source_job_id);
