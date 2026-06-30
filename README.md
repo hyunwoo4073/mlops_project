@@ -1,8 +1,8 @@
 # jobskill-mlops project
 
-채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 생성, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
+채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 리로드까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 프로젝트 목표
 
@@ -10,6 +10,7 @@
 
 ```text
 샘플 채용공고 데이터 생성
+→ 외부 채용공고 수집
 → PostgreSQL raw 테이블 적재
 → 텍스트 정제 / 직무 라벨링 / 기술스택 추출
 → PostgreSQL cleaned / skills 테이블 저장
@@ -25,6 +26,7 @@
 → promoted model 기반 batch inference
 → model_predictions 테이블 저장
 → prediction lineage 저장
+→ source별 품질 / lineage 리포트 생성
 → FastAPI 단건 예측
 → FastAPI serving model 자동 reload
 → Airflow DAG로 전체 파이프라인 실행
@@ -35,6 +37,9 @@
 ```mermaid
 flowchart LR
     A[Sample Job CSV] --> B[raw_job_posts]
+    EXT[Remote OK Job Feed] --> CR[Crawler / Filtering]
+    CR --> B
+
     B --> C[Preprocessing]
     C --> D[cleaned_job_posts]
     C --> E[job_post_skills]
@@ -61,18 +66,24 @@ flowchart LR
     BM --> K
     K --> J
 
+    QR --> R[Pipeline Report]
+    MR --> R
+    J --> R
+    D --> R
+
     subgraph Orchestration
-        L[Airflow DAG]
+        L[Airflow DAG / PythonOperator]
     end
 
     L --> A
-    L --> B
+    L --> CR
     L --> C
     L --> Q1
     L --> F
     L --> Q2
     L --> P
     L --> I
+    L --> R
 ```
 
 ## 현재 구성
@@ -107,6 +118,8 @@ ML Lifecycle    : MLflow
 Preprocessing   : pandas
 Model           : scikit-learn
 API             : FastAPI
+Crawler         : requests, BeautifulSoup
+Test            : pytest
 Container       : Docker Compose
 ```
 
@@ -117,6 +130,7 @@ Container       : Docker Compose
 ├── README.md
 ├── docker-compose.yml
 ├── requirements.txt
+├── pytest.ini
 ├── .env.example
 ├── .gitignore
 ├── dags/
@@ -131,13 +145,17 @@ Container       : Docker Compose
 │           ├── 01-create-airflow-db.sql
 │           └── 02-create-mlflow-db.sql
 ├── sql/
-│   └── create_tables.sql
+│   ├── create_tables.sql
+│   └── report_queries.sql
 ├── scripts/
 │   └── generate_sample_jobs.py
 ├── src/
 │   ├── common/
 │   │   ├── db.py
-│   │   └── model_registry.py
+│   │   ├── model_registry.py
+│   │   └── prediction_quality.py
+│   ├── crawling/
+│   │   └── crawl_remoteok_jobs.py
 │   ├── ingestion/
 │   │   └── load_raw_jobs.py
 │   ├── preprocessing/
@@ -149,25 +167,36 @@ Container       : Docker Compose
 │   │   ├── check_logger.py
 │   │   ├── check_training_data.py
 │   │   └── check_model_performance.py
+│   ├── reporting/
+│   │   └── generate_pipeline_report.py
 │   ├── training/
 │   │   ├── train_baseline.py
 │   │   └── promote_model.py
 │   └── inference/
 │       ├── api.py
 │       └── batch_inference.py
+├── tests/
+│   └── unit/
 ├── data/
 │   ├── raw/
 │   └── processed/
 ├── models/
 │   └── best/
+├── reports/
+│   └── latest_pipeline_report.md
 ├── mlartifacts/
 ├── airflow_logs/
 ├── docs/
 │   └── images/
+│       ├── Airflow DAG success.png
+│       ├── fastapi.png
+│       ├── mlflow.png
+│       └── postgresql.png
 └── notebooks/
 ```
 
-> `data/`, `models/`, `mlartifacts/`, `airflow_logs/`, `.env`, `simple_auth_manager_passwords.json` 등은 로컬 실행 중 생성되는 산출물이므로 Git에는 포함하지 않습니다.
+> `data/`, `models/`, `mlartifacts/`, `airflow_logs/`, `.env`, `simple_auth_manager_passwords.json` 등은 로컬 실행 중 생성되는 산출물이므로 Git에는 포함하지 않습니다.  
+> 포트폴리오 확인용 스크린샷은 `docs/images/`에 저장하고 README에서 상대경로로 참조합니다.
 
 ## 주요 컴포넌트
 
@@ -193,13 +222,56 @@ Data Analyst
 data/raw/sample_jobs.csv
 ```
 
-### 2. Raw 데이터 적재
+### 2. 외부 채용공고 수집
+
+`src/crawling/crawl_remoteok_jobs.py`
+
+Remote OK의 public job feed를 사용해 실제 원격 채용공고 데이터를 수집하고 `raw_job_posts`에 upsert합니다.
+
+저장 정보:
+
+```text
+source
+source_job_id
+external_id
+source_url
+title
+company
+location
+description
+tags
+crawled_at
+```
+
+수집 단계에서는 비개발/비데이터 직무가 학습 데이터에 과도하게 유입되지 않도록 필터링을 수행합니다.
+
+```text
+수집 대상:
+Data Engineer
+Backend Engineer
+ML Engineer
+DevOps Engineer
+Data Analyst
+
+필터링 기준:
+title, description, tags 기반 직무 라벨 추론
+Unknown으로 분류되는 공고는 raw 적재 전 제외
+```
+
+### 3. Raw 데이터 적재
 
 `src/ingestion/load_raw_jobs.py`
 
 생성된 CSV 데이터를 PostgreSQL의 `raw_job_posts` 테이블에 적재합니다.
 
-### 3. 전처리
+샘플 데이터와 외부 수집 데이터는 `source`로 구분합니다.
+
+```text
+source = sample
+source = remoteok
+```
+
+### 4. 전처리
 
 `src/preprocessing/preprocess_db.py`
 
@@ -210,6 +282,13 @@ data/raw/sample_jobs.csv
 직무 라벨링
 기술스택 추출
 전처리 결과 저장
+```
+
+Remote OK 데이터는 중요한 힌트가 `tags`에 포함되는 경우가 많기 때문에, 전처리와 라벨링에는 `title`, `description`, `tags`를 함께 사용합니다.
+
+```text
+text_for_model = cleaned_title + cleaned_description + cleaned_tags
+job_category  = label_job(title, description + tags)
 ```
 
 저장 테이블:
@@ -232,7 +311,34 @@ CASCADE;
 
 `model_predictions`와 `job_post_skills`가 `cleaned_job_posts`를 참조하므로, 단순히 `cleaned_job_posts`만 먼저 삭제하면 FK 제약조건 오류가 발생할 수 있습니다.
 
-### 4. 데이터 품질 체크
+### 5. 직무 라벨링 규칙
+
+`src/preprocessing/label_jobs.py`
+
+기존 단순 키워드 기반 라벨링을 직무별 weighted keyword scoring 방식으로 개선했습니다.
+
+개선 내용:
+
+```text
+제목 키워드 가중치 반영
+description / tags 기반 라벨링 보강
+직무별 주요 기술 키워드 확장
+영문/한글 직무 표현 동시 지원
+Unknown 라벨 비율 감소
+```
+
+라벨 대상:
+
+```text
+Data Engineer
+Backend Engineer
+ML Engineer
+DevOps Engineer
+Data Analyst
+Unknown
+```
+
+### 6. 데이터 품질 체크
 
 `src/quality/check_training_data.py`
 
@@ -250,19 +356,9 @@ job_category 누락 여부
 Unknown 라벨 비율
 ```
 
-Airflow DAG에서는 `preprocess_jobs` 이후, `train_model` 이전에 실행됩니다.
-
-```text
-preprocess_jobs
-    ↓
-check_training_data
-    ↓
-train_model
-```
-
 데이터 품질 기준을 통과하지 못하면 DAG를 실패시켜, 부적절한 데이터로 모델 학습이 진행되지 않도록 합니다.
 
-### 5. 검증 결과 저장
+### 7. 검증 결과 저장
 
 `src/quality/check_logger.py`
 
@@ -292,7 +388,7 @@ checked_at
 
 이를 통해 Airflow DAG 실행 시점마다 어떤 검증 항목이 통과 또는 실패했는지 추적할 수 있습니다.
 
-### 6. 모델 학습
+### 8. 모델 학습
 
 `src/training/train_baseline.py`
 
@@ -313,7 +409,29 @@ MLflow experiment/run 기록
 MLflow model artifact 저장
 ```
 
-### 7. 모델 성능 체크
+### 9. MLflow Tracking
+
+MLflow는 PostgreSQL의 `mlflow` DB를 backend store로 사용합니다.
+
+```text
+MLFLOW_TRACKING_URI=postgresql+psycopg2://jobskill:jobskill@postgres:5432/mlflow
+```
+
+Artifact는 로컬 `mlartifacts/` 디렉터리에 저장됩니다.
+
+```text
+MLFLOW_ARTIFACT_ROOT=/opt/airflow/project/mlartifacts
+```
+
+MLflow UI:
+
+```text
+http://localhost:5000
+```
+
+<img src="docs/images/mlflow.png" width="900">
+
+### 10. 모델 성능 체크
 
 `src/quality/check_model_performance.py`
 
@@ -326,19 +444,9 @@ accuracy >= MIN_MODEL_ACCURACY
 f1_weighted >= MIN_MODEL_F1_WEIGHTED
 ```
 
-Airflow DAG에서는 `train_model` 이후, `promote_model` 이전에 실행됩니다.
-
-```text
-train_model
-    ↓
-check_model_performance
-    ↓
-promote_model
-```
-
 모델 성능이 기준보다 낮으면 DAG를 실패시켜, 낮은 품질의 모델이 promotion 또는 batch inference 단계로 넘어가지 않도록 합니다.
 
-### 8. 모델 승격
+### 11. 모델 승격
 
 `src/training/promote_model.py`
 
@@ -365,19 +473,9 @@ PROMOTED
 REJECTED
 ```
 
-Airflow DAG에서는 `check_model_performance` 이후, `batch_inference` 이전에 실행됩니다.
-
-```text
-check_model_performance
-    ↓
-promote_model
-    ↓
-batch_inference
-```
-
 이를 통해 기준 미달 모델이나 기존 best보다 낮은 성능의 모델이 추론 단계에 사용되지 않도록 제어합니다.
 
-### 9. Prediction Lineage
+### 12. Prediction Lineage
 
 `src/common/model_registry.py`
 
@@ -401,7 +499,32 @@ model_registry
 model_predictions
 ```
 
-### 10. Batch Inference
+### 13. 예측 품질 정보
+
+`src/common/prediction_quality.py`
+
+FastAPI와 batch inference 예측 결과에 단순 예측값뿐 아니라 예측 품질 정보를 함께 저장합니다.
+
+저장 정보:
+
+```text
+confidence
+confidence_level
+is_low_confidence
+top_predictions
+```
+
+예측 품질 기준:
+
+```text
+HIGH   : confidence >= 0.8
+MEDIUM : confidence >= 0.6
+LOW    : confidence < 0.6
+```
+
+이를 통해 예측 결과가 낮은 신뢰도인지, 상위 후보군이 어떻게 분포하는지 확인할 수 있습니다.
+
+### 14. Batch Inference
 
 `src/inference/batch_inference.py`
 
@@ -410,12 +533,13 @@ model_predictions
 ```text
 cleaned_job_posts
 → promoted model predict
+→ prediction quality 계산
 → model_predictions 저장
 ```
 
-batch inference 결과에는 예측값뿐 아니라 model lineage도 함께 저장됩니다.
+batch inference 결과에는 예측값, confidence, top-k 후보, model lineage가 함께 저장됩니다.
 
-### 11. FastAPI
+### 15. FastAPI
 
 `src/inference/api.py`
 
@@ -435,6 +559,9 @@ POST /predict
 ```text
 직무 카테고리 예측
 confidence 반환
+confidence_level 반환
+low confidence 여부 반환
+top-k prediction 반환
 기술스택 추출
 model_predictions 테이블 저장
 model lineage 저장
@@ -442,7 +569,43 @@ model lineage 저장
 
 FastAPI는 시작 시점에 모델을 로드하며, 요청 시점에 현재 promoted model metadata를 확인합니다. 모델 파일 또는 registry 정보가 변경되면 새 모델을 자동으로 reload합니다.
 
-### 12. Airflow DAG
+<img src="docs/images/fastapi.png" width="900">
+
+### 16. Pipeline Report
+
+`src/reporting/generate_pipeline_report.py`
+
+모델 registry, prediction lineage, pipeline check 결과를 조회해 Markdown 리포트를 생성합니다.
+
+생성 파일:
+
+```text
+reports/latest_pipeline_report.md
+```
+
+리포트 포함 내용:
+
+```text
+Latest Promoted Model
+Model Registry History
+Prediction Lineage Summary
+Latest Predictions
+Prediction Category Distribution
+Check Result Summary
+Latest Check Details
+Failed Checks
+Model Promotion Summary
+Raw Job Count by Source
+Cleaned Job Quality by Source
+Job Category Distribution by Source
+Skill Extraction Summary by Source
+Top Skills by Source
+Prediction Summary by Source
+```
+
+이를 통해 현재 서빙 모델, 모델 승격 이력, 예측 lineage, 데이터/모델 검증 결과, source별 데이터 품질을 한 번에 확인할 수 있습니다.
+
+### 17. Airflow DAG
 
 `dags/jobskill_pipeline_dag.py`
 
@@ -452,6 +615,8 @@ FastAPI는 시작 시점에 모델을 로드하며, 요청 시점에 현재 prom
 generate_sample_jobs
     ↓
 load_raw_jobs
+    ↓
+crawl_remoteok_jobs
     ↓
 preprocess_jobs
     ↓
@@ -464,12 +629,55 @@ check_model_performance
 promote_model
     ↓
 batch_inference
+    ↓
+generate_pipeline_report
 ```
 
 DAG 이름:
 
 ```text
 jobskill_mlops_pipeline
+```
+
+초기 DAG는 BashOperator로 각 Python 스크립트를 실행하는 방식이었지만, 현재는 PythonOperator 기반으로 개선했습니다.
+
+```text
+기존:
+BashOperator
+→ python src/xxx.py
+
+개선:
+PythonOperator
+→ 각 모듈의 main() 함수 직접 호출
+```
+
+<img src="docs/images/Airflow%20DAG%20success.png" width="900">
+
+### 18. 테스트 코드
+
+`tests/unit/`
+
+주요 전처리/예측 품질 로직에 대해 pytest 기반 단위 테스트를 추가했습니다.
+
+테스트 대상:
+
+```text
+직무 라벨링 규칙
+confidence level 계산
+low confidence 판단
+top-k prediction 생성
+```
+
+실행:
+
+```bash
+pytest
+```
+
+컨테이너 내부 실행:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytest"
 ```
 
 ## PostgreSQL 테이블
@@ -490,6 +698,8 @@ model_registry
 ```text
 raw_job_posts
 - 원천 채용공고 저장
+- sample / remoteok 등 source 구분
+- external_id / source_job_id 기반 외부 데이터 추적
 
 cleaned_job_posts
 - 정제된 채용공고 저장
@@ -502,6 +712,7 @@ job_post_skills
 model_predictions
 - FastAPI 또는 batch inference 예측 결과 저장
 - 예측에 사용된 모델 lineage 저장
+- confidence / top-k prediction 저장
 
 pipeline_check_results
 - 데이터 품질 체크 결과 저장
@@ -515,6 +726,10 @@ model_registry
 FK 관계:
 
 ```text
+raw_job_posts
+    ↑
+    └── cleaned_job_posts.raw_id
+
 cleaned_job_posts
     ↑
     ├── job_post_skills.job_post_id
@@ -524,6 +739,8 @@ model_registry
     ↑
     └── model_predictions.model_registry_id
 ```
+
+<img src="docs/images/postgresql.png" width="900">
 
 ## 환경 변수
 
@@ -563,6 +780,15 @@ MAX_UNKNOWN_RATIO=0.5
 
 MIN_MODEL_ACCURACY=0.7
 MIN_MODEL_F1_WEIGHTED=0.7
+
+LOW_CONFIDENCE_THRESHOLD=0.6
+PREDICTION_TOP_K=3
+
+REMOTEOK_API_URL=https://remoteok.com/api
+REMOTEOK_CRAWL_LIMIT=50
+REMOTEOK_SCAN_LIMIT=1000
+REMOTEOK_FILTER_ENABLED=true
+REMOTEOK_MIN_RELEVANCE_SCORE=2
 ```
 
 로컬 Python에서 직접 실행할 경우에는 `DB_HOST=localhost`로 변경합니다.
@@ -690,126 +916,19 @@ scheduler api_secret == apiserver api_secret
 execution_api_server_url == http://airflow-apiserver:8080/execution/
 ```
 
-## Airflow 로그인 설정
-
-Airflow 3.x Simple Auth Manager를 사용합니다.
-
-개발 편의를 위해 로컬에 아래 파일을 생성합니다.
-
-```bash
-vi simple_auth_manager_passwords.json
-```
-
-내용:
-
-```json
-{
-  "airflow": "airflow"
-}
-```
-
-해당 파일은 Git에 포함하지 않습니다.
-
-```text
-ID: airflow
-PW: airflow
-```
-
-만약 자동 생성된 계정을 사용하는 경우, 로그에 아래와 같은 형태로 비밀번호가 출력될 수 있습니다.
-
-```text
-Simple auth manager | Password for user 'admin': <generated-password>
-```
-
-이 경우 접속 정보는 아래와 같습니다.
-
-```text
-ID: admin
-PW: <generated-password>
-```
-
-## Docker Compose Airflow 공통 설정 예시
-
-`x-airflow-common`의 `environment`는 반드시 map 형태로 작성합니다.
-
-정상:
-
-```yaml
-environment:
-  KEY: value
-  KEY2: value2
-```
-
-잘못된 형태:
-
-```yaml
-environment:
-  - KEY=value
-```
-
-Airflow 공통 설정 예시:
-
-```yaml
-x-airflow-common: &airflow-common
-  image: jobskill-airflow:3.2.2
-  env_file:
-    - .env
-  environment: &airflow-common-env
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
-
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}
-
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
-    AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
-    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
-
-    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
-
-    AIRFLOW__CORE__PARALLELISM: "4"
-    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "1"
-    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
-
-    AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
-    AIRFLOW__SIMPLE_AUTH_MANAGER__USERS: airflow:admin
-    AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json
-
-    PYTHONPATH: /opt/airflow/project
-```
-
-Airflow 서비스 예시:
-
-```yaml
-airflow-apiserver:
-  <<: *airflow-common
-  container_name: jobskill-airflow-apiserver
-  command: api-server --host 0.0.0.0 --port 8080
-  ports:
-    - "8081:8080"
-
-airflow-scheduler:
-  <<: *airflow-common
-  container_name: jobskill-airflow-scheduler
-  command: scheduler
-
-airflow-dag-processor:
-  <<: *airflow-common
-  container_name: jobskill-airflow-dag-processor
-  command: dag-processor
-
-airflow-triggerer:
-  <<: *airflow-common
-  container_name: jobskill-airflow-triggerer
-  command: triggerer
-```
-
 ## 실행 방법
 
 ### 1. 필요한 디렉터리 생성
 
 ```bash
-mkdir -p data/raw data/processed models/best mlartifacts airflow_logs
+mkdir -p data/raw data/processed models/best mlartifacts airflow_logs reports docs/images
+```
+
+권한 설정:
+
+```bash
+sudo chown -R 50000:0 data models mlartifacts airflow_logs reports
+sudo chmod -R g+rwX data models mlartifacts airflow_logs reports
 ```
 
 ### 2. Airflow 이미지 빌드
@@ -944,12 +1063,6 @@ docker compose exec airflow-scheduler airflow dags list-runs jobskill_mlops_pipe
 docker compose exec airflow-scheduler airflow tasks states-for-dag-run jobskill_mlops_pipeline "<run_id>"
 ```
 
-### DAG 테스트 실행
-
-```bash
-docker compose exec airflow-scheduler airflow dags test jobskill_mlops_pipeline 2026-06-24
-```
-
 ## 실행 결과 확인
 
 Airflow DAG를 통해 전체 파이프라인이 아래 순서로 실행됩니다.
@@ -958,6 +1071,8 @@ Airflow DAG를 통해 전체 파이프라인이 아래 순서로 실행됩니다
 generate_sample_jobs
     ↓
 load_raw_jobs
+    ↓
+crawl_remoteok_jobs
     ↓
 preprocess_jobs
     ↓
@@ -970,19 +1085,23 @@ check_model_performance
 promote_model
     ↓
 batch_inference
+    ↓
+generate_pipeline_report
 ```
 
 정상 상태 예시:
 
 ```text
-generate_sample_jobs        success
-load_raw_jobs               success
-preprocess_jobs             success
-check_training_data         success
-train_model                 success
-check_model_performance     success
-promote_model               success
-batch_inference             success
+generate_sample_jobs         success
+load_raw_jobs                success
+crawl_remoteok_jobs          success
+preprocess_jobs              success
+check_training_data          success
+train_model                  success
+check_model_performance      success
+promote_model                success
+batch_inference              success
+generate_pipeline_report     success
 ```
 
 파이프라인 실행 후 PostgreSQL에는 데이터, 검증 결과, 모델 승격 결과, 예측 결과가 저장됩니다.
@@ -996,79 +1115,6 @@ SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
 ```
 
-직무별 데이터 분포 확인:
-
-```sql
-SELECT job_category, COUNT(*)
-FROM cleaned_job_posts
-GROUP BY job_category
-ORDER BY job_category;
-```
-
-검증 결과 확인:
-
-```sql
-SELECT
-    check_type,
-    check_name,
-    status,
-    metric_value,
-    threshold_value,
-    message,
-    checked_at
-FROM pipeline_check_results
-ORDER BY id DESC
-LIMIT 20;
-```
-
-모델 registry 확인:
-
-```sql
-SELECT
-    id,
-    model_name,
-    run_id,
-    accuracy,
-    f1_weighted,
-    status,
-    promoted_model_path,
-    created_at
-FROM model_registry
-ORDER BY id DESC
-LIMIT 10;
-```
-
-예측 결과와 model lineage 확인:
-
-```sql
-SELECT
-    id,
-    job_post_id,
-    predicted_category,
-    ROUND(confidence::numeric, 4) AS confidence,
-    model_name,
-    model_version,
-    model_run_id,
-    model_registry_id,
-    model_path,
-    predicted_at
-FROM model_predictions
-ORDER BY id DESC
-LIMIT 10;
-```
-
-MLflow에서는 모델 학습 run, metric, artifact 저장 여부를 확인합니다.
-
-```text
-http://localhost:5000
-```
-
-FastAPI는 Swagger UI에서 확인합니다.
-
-```text
-http://localhost:8000/docs
-```
-
 ## 로컬 Python 스크립트 실행 순서
 
 Airflow 없이 개별 스크립트로 실행할 수도 있습니다.
@@ -1076,12 +1122,14 @@ Airflow 없이 개별 스크립트로 실행할 수도 있습니다.
 ```bash
 python scripts/generate_sample_jobs.py
 python src/ingestion/load_raw_jobs.py
+python src/crawling/crawl_remoteok_jobs.py
 python src/preprocessing/preprocess_db.py
 python src/quality/check_training_data.py
 python src/training/train_baseline.py
 python src/quality/check_model_performance.py
 python src/training/promote_model.py
 python src/inference/batch_inference.py
+python src/reporting/generate_pipeline_report.py
 ```
 
 컨테이너 내부에서 실행할 경우:
@@ -1089,12 +1137,14 @@ python src/inference/batch_inference.py
 ```bash
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/generate_sample_jobs.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/ingestion/load_raw_jobs.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/crawling/crawl_remoteok_jobs.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/preprocessing/preprocess_db.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_training_data.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/training/train_baseline.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_performance.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/training/promote_model.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/inference/batch_inference.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
 ```
 
 ## FastAPI 실행
@@ -1166,6 +1216,22 @@ curl -X POST "http://localhost:8000/predict" \
 {
   "job_category": "Data Engineer",
   "confidence": 0.91,
+  "confidence_level": "HIGH",
+  "is_low_confidence": false,
+  "top_predictions": [
+    {
+      "category": "Data Engineer",
+      "probability": 0.91
+    },
+    {
+      "category": "Backend Engineer",
+      "probability": 0.05
+    },
+    {
+      "category": "ML Engineer",
+      "probability": 0.02
+    }
+  ],
   "skills": ["Airflow", "Kafka", "Python", "Spark", "SQL"],
   "prediction_id": 1,
   "model_name": "job_classifier",
@@ -1198,6 +1264,36 @@ SELECT COUNT(*) FROM job_post_skills;
 SELECT COUNT(*) FROM pipeline_check_results;
 SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
+```
+
+source별 raw 데이터 확인:
+
+```sql
+SELECT
+    source,
+    COUNT(*) AS cnt
+FROM raw_job_posts
+GROUP BY source
+ORDER BY source;
+```
+
+source별 라벨 품질 확인:
+
+```sql
+SELECT
+    COALESCE(r.source, 'unknown') AS source,
+    COUNT(*) AS cleaned_count,
+    COUNT(*) FILTER (WHERE c.job_category = 'Unknown') AS unknown_count,
+    ROUND(
+        COUNT(*) FILTER (WHERE c.job_category = 'Unknown')::numeric
+        / NULLIF(COUNT(*), 0),
+        4
+    ) AS unknown_ratio
+FROM cleaned_job_posts c
+JOIN raw_job_posts r
+    ON c.raw_id = r.id
+GROUP BY COALESCE(r.source, 'unknown')
+ORDER BY cleaned_count DESC;
 ```
 
 직무별 건수 확인:
@@ -1272,6 +1368,8 @@ SELECT
     mp.job_post_id,
     mp.predicted_category,
     ROUND(mp.confidence::numeric, 4) AS confidence,
+    mp.confidence_level,
+    mp.is_low_confidence,
     mp.model_name,
     mp.model_version,
     mp.model_run_id,
@@ -1306,80 +1404,55 @@ ORDER BY mp.id
 LIMIT 20;
 ```
 
-## 권한 문제 해결
+## Pipeline Report 생성
 
-Airflow task가 `data/raw/sample_jobs.csv`, `models/`, `mlartifacts/`, `airflow_logs/`에 쓰지 못하는 경우 아래 명령을 실행합니다.
-
-```bash
-sudo chown -R 50000:0 data models mlartifacts airflow_logs
-sudo chmod -R g+rwX data models mlartifacts airflow_logs
-```
-
-개발용으로 간단히 열어도 됩니다.
+리포트 생성:
 
 ```bash
-chmod -R 777 data models mlartifacts airflow_logs
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
 ```
 
-## MLflow
-
-MLflow는 PostgreSQL의 `mlflow` DB를 backend store로 사용합니다.
+생성 결과:
 
 ```text
-MLFLOW_TRACKING_URI=postgresql+psycopg2://jobskill:jobskill@postgres:5432/mlflow
+reports/latest_pipeline_report.md
 ```
 
-Artifact는 로컬 `mlartifacts/` 디렉터리에 저장됩니다.
+리포트에서 확인 가능한 내용:
 
 ```text
-MLFLOW_ARTIFACT_ROOT=/opt/airflow/project/mlartifacts
+현재 promoted model
+모델 승격/거절 이력
+예측 결과 lineage
+데이터 품질 체크 결과
+모델 성능 체크 결과
+source별 Unknown 비율
+source별 라벨 분포
+source별 skill 추출 결과
+source별 prediction confidence
 ```
 
-MLflow UI:
+## 테스트 실행
+
+로컬 실행:
+
+```bash
+pytest
+```
+
+컨테이너 내부 실행:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytest"
+```
+
+테스트 대상:
 
 ```text
-http://localhost:5000
-```
-
-## Screenshots
-
-포트폴리오 확인용으로 아래 스크린샷을 추가할 수 있습니다.
-
-```text
-docs/images/
-├── airflow-dag-success.png
-├── airflow-task-graph.png
-├── mlflow-run-metrics.png
-├── mlflow-artifacts.png
-├── fastapi-docs.png
-├── api-model-info.png
-├── postgres-check-results.png
-├── postgres-model-registry.png
-└── postgres-prediction-lineage.png
-```
-
-README 예시:
-
-```md
-### Airflow DAG
-
-![Airflow DAG Success](docs/images/airflow-dag-success.png)
-
-### MLflow Experiment
-
-![MLflow Run Metrics](docs/images/mlflow-run-metrics.png)
-
-### FastAPI Docs
-
-![FastAPI Docs](docs/images/fastapi-docs.png)
-
-### Model Registry
-
-![Model Registry](docs/images/postgres-model-registry.png)
-
-### Prediction Lineage
-
-![Prediction Lineage](docs/images/postgres-prediction-lineage.png)
+직무 라벨링 규칙
+예측 confidence level
+low confidence 판단
+top-k prediction 생성
 ```
 
 ## Git 제외 대상
@@ -1401,6 +1474,14 @@ mlruns/
 airflow_logs/
 simple_auth_manager_passwords.json
 ```
+
+포트폴리오용 스크린샷은 Git에 포함합니다.
+
+```text
+docs/images/
+```
+
+`reports/latest_pipeline_report.md`는 실행 결과 예시로 보여주고 싶으면 커밋해도 되고, 매 실행마다 바뀌는 산출물로 관리하려면 `.gitignore`에 추가합니다.
 
 ## 트러블슈팅
 
@@ -1446,8 +1527,8 @@ PermissionError: [Errno 13] Permission denied: 'data/raw/sample_jobs.csv'
 해결:
 
 ```bash
-sudo chown -R 50000:0 data models mlartifacts airflow_logs
-sudo chmod -R g+rwX data models mlartifacts airflow_logs
+sudo chown -R 50000:0 data models mlartifacts airflow_logs reports
+sudo chmod -R g+rwX data models mlartifacts airflow_logs reports
 ```
 
 ### 3. cleaned_job_posts 삭제 시 FK 오류
@@ -1476,19 +1557,26 @@ RESTART IDENTITY
 CASCADE;
 ```
 
+Remote OK raw 데이터를 삭제하려면 파생 테이블을 먼저 비워야 합니다.
+
+```sql
+TRUNCATE TABLE
+    model_predictions,
+    job_post_skills,
+    cleaned_job_posts
+RESTART IDENTITY
+CASCADE;
+
+DELETE FROM raw_job_posts
+WHERE source = 'remoteok';
+```
+
 ### 4. Airflow execution API connection refused
 
 증상:
 
 ```text
 httpx.ConnectError: [Errno 111] Connection refused
-```
-
-원인:
-
-```text
-scheduler 컨테이너가 execution API를 localhost:8080으로 찾거나,
-airflow-apiserver가 실행 중이지 않음
 ```
 
 해결:
@@ -1590,12 +1678,6 @@ services.airflow-apiserver.environment must be a mapping
 services.airflow-scheduler.environment must be a mapping
 ```
 
-원인:
-
-```text
-environment를 list 형태 또는 잘못된 YAML 형태로 작성함
-```
-
 정상:
 
 ```yaml
@@ -1617,211 +1699,12 @@ environment:
 docker compose config
 ```
 
-### 8. Docker Desktop API 500 오류
-
-증상:
-
-```text
-request returned 500 Internal Server Error for API route
-check if the server supports the requested API version
-```
-
-원인:
-
-```text
-Docker Desktop 또는 Docker Engine 상태가 꼬인 경우
-```
-
-해결:
-
-```powershell
-wsl --shutdown
-```
-
-그 후 Docker Desktop을 재시작합니다.
-
-WSL에서 다시 확인:
-
-```bash
-docker version
-docker compose ps
-```
-
-### 9. No logs available for this task
-
-증상:
-
-```text
-No logs available for this task.
-```
-
-원인:
-
-```text
-task가 아직 running 상태로 넘어가지 못하고 queued 상태에 머물러 있으면 로그 파일이 생성되지 않을 수 있음
-```
-
-확인:
-
-```bash
-docker compose exec airflow-scheduler airflow dags list-runs jobskill_mlops_pipeline
-docker compose exec airflow-scheduler airflow tasks states-for-dag-run jobskill_mlops_pipeline "<run_id>"
-```
-
-scheduler 로그 확인:
-
-```bash
-docker compose logs --tail=500 airflow-scheduler | grep -E "jobskill_mlops_pipeline|queued|scheduled|running|failed|ERROR|Traceback|LocalExecutor|TaskInstance|paused|pool" -A 30 -B 30
-```
-
-scheduler가 정상 기동되면 아래와 같은 로그를 확인할 수 있습니다.
-
-```text
-Worker starting up
-LocalExecutor
-Adopting or resetting orphaned tasks for active dag runs
-Uvicorn running on http://:8793
-```
-
-DAG가 paused 상태인 경우 unpause 후 다시 trigger합니다.
-
-```bash
-docker compose exec airflow-scheduler airflow dags unpause jobskill_mlops_pipeline
-docker compose exec airflow-scheduler airflow dags trigger jobskill_mlops_pipeline
-```
-
-### 10. Git history에 포함된 secret 제거
-
-증상:
-
-```text
-README 또는 docker-compose.yml에 로컬 개발용 secret 값이 커밋됨
-```
-
-해결:
-
-```bash
-cat > replacements.txt <<'EOF'
-기존_SECRET_값==>REMOVED_SECRET
-EOF
-
-git filter-repo --replace-text replacements.txt --force
-```
-
-검증:
-
-```bash
-git log -S"기존_SECRET_값" --all --oneline
-git grep -n "기존_SECRET_값"
-```
-
-History rewrite 이후 원격 저장소에 강제 push합니다.
-
-```bash
-git push origin --force --all
-git push origin --force --tags
-```
-
-노출된 secret은 폐기하고 새 값으로 교체합니다.
-
-### 11. 데이터 품질 체크 실패
-
-증상:
-
-```text
-check_training_data task failed
-```
-
-원인 예시:
-
-```text
-cleaned_job_posts 데이터 수 부족
-text_for_model 누락
-job_category 누락
-Unknown 라벨 비율 초과
-기술스택 추출 결과 없음
-```
-
-확인:
-
-```bash
-docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_training_data.py"
-```
-
-관련 환경변수:
-
-```env
-MIN_TRAINING_ROWS=50
-MIN_CATEGORY_COUNT=2
-MAX_UNKNOWN_RATIO=0.5
-```
-
-데이터 품질 기준을 통과하지 못하면 모델 학습을 중단합니다.
-
-### 12. 모델 성능 체크 실패
-
-증상:
-
-```text
-check_model_performance task failed
-```
-
-원인 예시:
-
-```text
-MLflow experiment 없음
-MLflow run 없음
-accuracy metric 없음
-f1_weighted metric 없음
-성능 기준 미달
-```
-
-확인:
-
-```bash
-docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_performance.py"
-```
-
-관련 환경변수:
-
-```env
-MLFLOW_EXPERIMENT_NAME=jobskill-classifier
-MIN_MODEL_ACCURACY=0.7
-MIN_MODEL_F1_WEIGHTED=0.7
-```
-
-실패 테스트:
-
-```bash
-docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && MIN_MODEL_ACCURACY=1.1 python src/quality/check_model_performance.py"
-```
-
-모델 성능 기준을 통과하지 못하면 promotion과 batch inference를 중단합니다.
-
-### 13. Batch inference 입력 데이터 없음
+### 8. Batch inference 입력 데이터 없음
 
 증상:
 
 ```text
 ValueError: No cleaned job posts found. Run preprocess_db.py first.
-```
-
-원인:
-
-```text
-cleaned_job_posts에 text_for_model이 있는 데이터가 없음
-batch_inference를 전처리 없이 단독 실행함
-```
-
-확인:
-
-```bash
-docker exec -it jobskill-postgres psql -U jobskill -d jobskill -c "
-SELECT
-    COUNT(*) AS cleaned_count,
-    COUNT(text_for_model) AS text_not_null_count
-FROM cleaned_job_posts;
-"
 ```
 
 해결:
@@ -1838,7 +1721,7 @@ docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytho
 docker compose exec airflow-scheduler airflow dags trigger jobskill_mlops_pipeline
 ```
 
-### 14. 모델 승격 결과 확인
+### 9. 모델 승격 결과 확인
 
 모델 promotion 결과는 `model_registry` 테이블에서 확인합니다.
 
@@ -1860,7 +1743,7 @@ LIMIT 10;
 
 같은 성능의 모델을 반복 실행하면 `REJECTED`가 나올 수 있습니다. 이는 기존 best model보다 성능이 개선되지 않았다는 의미이므로 정상 동작입니다.
 
-### 15. API 모델 reload 확인
+### 10. API 모델 reload 확인
 
 현재 API가 사용하는 모델 정보는 `/model`에서 확인합니다.
 
@@ -1880,6 +1763,48 @@ curl -X POST http://localhost:8000/reload-model
 docker compose logs --tail=100 api
 ```
 
+### 11. 크롤링 데이터 Unknown 비율이 높은 경우
+
+Remote OK는 개발/데이터 직무 외의 공고도 포함될 수 있습니다.
+
+확인:
+
+```sql
+SELECT
+    job_category,
+    COUNT(*) AS cnt
+FROM cleaned_job_posts
+GROUP BY job_category
+ORDER BY cnt DESC;
+```
+
+source별 Unknown 비율 확인:
+
+```sql
+SELECT
+    COALESCE(r.source, 'unknown') AS source,
+    COUNT(*) AS cleaned_count,
+    COUNT(*) FILTER (WHERE c.job_category = 'Unknown') AS unknown_count,
+    ROUND(
+        COUNT(*) FILTER (WHERE c.job_category = 'Unknown')::numeric
+        / NULLIF(COUNT(*), 0),
+        4
+    ) AS unknown_ratio
+FROM cleaned_job_posts c
+JOIN raw_job_posts r
+    ON c.raw_id = r.id
+GROUP BY COALESCE(r.source, 'unknown')
+ORDER BY cleaned_count DESC;
+```
+
+해결 방향:
+
+```text
+crawler에서 label_jobs.py 기준으로 Unknown 공고 제외
+preprocess_db.py에서 tags를 description과 함께 라벨링에 사용
+label_jobs.py의 직무별 keyword 확장
+```
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -1889,6 +1814,7 @@ Airflow 3.x 기반 DAG orchestration 구성
 Airflow scheduler, apiserver, dag-processor, triggerer 분리 실행
 Airflow execution API와 JWT secret 설정 문제 해결
 LocalExecutor 기반 task 실행 구조 확인
+BashOperator 기반 DAG를 PythonOperator 기반 DAG로 개선
 PostgreSQL을 서비스 DB, Airflow metadata DB, MLflow backend store로 분리 구성
 MLflow backend store와 artifact store 분리
 scikit-learn 모델 학습 결과를 MLflow에 기록
@@ -1900,7 +1826,10 @@ MLflow metric 기반 모델 성능 gate 구성
 promoted model 기반 batch inference 구성
 FastAPI 기반 단건 추론 API 구성
 FastAPI serving model 자동 reload 구성
-예측 결과에 model lineage를 저장해 추적 가능성 확보
+예측 결과에 model lineage와 prediction quality 저장
+Remote OK 외부 채용공고 수집 및 필터링 구성
+source별 데이터 품질 리포트 구성
+pytest 기반 단위 테스트 추가
 Docker Compose 기반 MLOps 개발 환경 구성
 Git history에 포함된 secret 제거 및 secret rotation 수행
 ```
@@ -1909,9 +1838,14 @@ Git history에 포함된 secret 제거 및 secret rotation 수행
 
 ```text
 샘플 채용공고 데이터 생성
+Remote OK 외부 채용공고 수집 추가
+크롤링 데이터 source / external_id / source_url 저장
+크롤링 데이터 필터링 추가
 PostgreSQL raw/cleaned/skills 테이블 저장
 전처리 결과 기반 데이터 품질 체크 추가
 데이터 품질 체크 결과 저장 테이블 추가
+label_jobs.py weighted keyword scoring 개선
+description / tags 기반 라벨링 개선
 TF-IDF + Logistic Regression 모델 학습
 MLflow PostgreSQL backend store 연동
 MLflow artifact 저장
@@ -1921,27 +1855,32 @@ best model promotion 로직 추가
 model_registry 테이블 추가
 promoted model 기반 batch inference 추가
 prediction lineage 저장 구조 추가
+prediction quality 저장 구조 추가
 FastAPI /predict API 구성
 FastAPI /model API 추가
 FastAPI /reload-model API 추가
 FastAPI serving model 자동 reload 추가
-model_predictions 테이블 저장 구조 확장
+Pipeline report 생성 추가
+source별 데이터 품질 리포트 추가
+pytest 단위 테스트 추가
 Airflow 3.x Docker Compose 구성
+Airflow DAG PythonOperator 전환
 Airflow execution API / JWT 설정 이슈 해결
 Airflow DAG 전체 실행 검증
 Git history secret 제거
 실행용 secret rotation
+README 스크린샷 추가
 포트폴리오용 README 보안 정리
 ```
 
 ## 다음 개선 예정
 
 ```text
-README 실행 스크린샷 추가
-label_jobs.py 규칙 확장으로 Unknown 라벨 감소
-FastAPI 예측 결과 품질 확인 강화
-실제 채용공고 크롤러 추가
-모델 registry / prediction lineage 기반 리포트 쿼리 추가
-Airflow DAG task를 BashOperator에서 PythonOperator 기반으로 개선 검토
-테스트 코드 추가
+크롤링 데이터 저장 모드 분리(sample only / crawler only / mixed)
+외부 채용공고 수집 실패 시 retry / fallback 처리
+FastAPI 예측 요청/응답 로그 테이블 분리
+prediction quality 기반 알림 또는 리포트 강화
+GitHub Actions 기반 pytest 자동 실행
+간단한 Streamlit 또는 Grafana 대시보드 추가
+실제 운영 환경 기준 README 아키텍처 다이어그램 보강
 ```

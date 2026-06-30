@@ -25,7 +25,8 @@ def main():
             company,
             location,
             career,
-            description
+            description,
+            tags
         FROM raw_job_posts
         ORDER BY id
     """
@@ -33,12 +34,34 @@ def main():
     df = pd.read_sql(raw_query, engine)
 
     if df.empty:
-        raise ValueError("raw_job_posts is empty. Run load_raw_jobs.py first.")
+        raise ValueError("raw_job_posts is empty. Run load_raw_jobs.py or crawler first.")
+
+    df["title"] = df["title"].fillna("")
+    df["description"] = df["description"].fillna("")
+    df["tags"] = df["tags"].fillna("")
 
     df["cleaned_title"] = df["title"].apply(clean_text)
     df["cleaned_description"] = df["description"].apply(clean_text)
-    df["text_for_model"] = df["cleaned_title"] + " " + df["cleaned_description"]
-    df["job_category"] = df["title"].apply(label_job)
+    df["cleaned_tags"] = df["tags"].apply(clean_text)
+
+    # 모델 입력에는 title + description + tags를 모두 사용
+    df["text_for_model"] = (
+        df["cleaned_title"]
+        + " "
+        + df["cleaned_description"]
+        + " "
+        + df["cleaned_tags"]
+    ).str.strip()
+
+    # 라벨링에도 title + description + tags를 모두 사용
+    df["job_category"] = df.apply(
+        lambda row: label_job(
+            title=row["title"],
+            description=f"{row['description']} {row['tags']}",
+        ),
+        axis=1,
+    )
+
     df["skills"] = df["text_for_model"].apply(extract_skills)
 
     cleaned_rows = df[
@@ -120,10 +143,12 @@ def main():
             job_post_id = id_map[row["raw_id"]]
 
             for skill in row["skills"]:
-                skill_rows.append({
-                    "job_post_id": job_post_id,
-                    "skill_name": skill,
-                })
+                skill_rows.append(
+                    {
+                        "job_post_id": job_post_id,
+                        "skill_name": skill,
+                    }
+                )
 
         if skill_rows:
             conn.execute(insert_skill_sql, skill_rows)
@@ -132,6 +157,15 @@ def main():
     print(f"Inserted skill rows: {len(skill_rows)}")
     print()
     print(df["job_category"].value_counts())
+
+    unknown_df = df[df["job_category"] == "Unknown"][
+        ["raw_id", "source", "title", "company", "tags"]
+    ].head(20)
+
+    if not unknown_df.empty:
+        print()
+        print("[Unknown samples]")
+        print(unknown_df.to_string(index=False))
 
 
 if __name__ == "__main__":
