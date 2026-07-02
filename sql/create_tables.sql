@@ -159,3 +159,57 @@ WHERE source IS NOT NULL
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_job_posts_source_source_job_id
 ON raw_job_posts(source, source_job_id);
+
+CREATE TABLE IF NOT EXISTS api_prediction_logs (
+    id BIGSERIAL PRIMARY KEY,
+
+    prediction_id BIGINT,
+    request_title TEXT,
+    request_description TEXT,
+    request_job_post_id BIGINT,
+
+    response_category VARCHAR(100),
+    response_confidence DOUBLE PRECISION,
+    response_confidence_level VARCHAR(20),
+    response_is_low_confidence BOOLEAN,
+    response_top_predictions JSONB,
+    response_skills JSONB,
+
+    model_name VARCHAR(100),
+    model_run_id VARCHAR(250),
+    model_registry_id BIGINT,
+    model_path TEXT,
+
+    status VARCHAR(30) NOT NULL,
+    error_message TEXT,
+    latency_ms DOUBLE PRECISION,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_api_prediction_logs_prediction
+        FOREIGN KEY (prediction_id)
+        REFERENCES model_predictions(id)
+        ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_prediction_logs_prediction_id
+ON api_prediction_logs(prediction_id);
+
+CREATE INDEX IF NOT EXISTS idx_api_prediction_logs_status
+ON api_prediction_logs(status);
+
+CREATE INDEX IF NOT EXISTS idx_api_prediction_logs_created_at
+ON api_prediction_logs(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_api_prediction_logs_model_registry_id
+ON api_prediction_logs(model_registry_id);
+
+ALTER TABLE model_predictions
+ADD COLUMN IF NOT EXISTS prediction_source VARCHAR(30) DEFAULT 'BATCH';
+
+UPDATE model_predictions
+SET prediction_source = 'BATCH'
+WHERE prediction_source IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_model_predictions_prediction_source
+ON model_predictions(prediction_source);

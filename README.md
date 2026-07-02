@@ -2,20 +2,43 @@
 
 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+
+## 주요 업데이트 내역
+
+```text
+2026-07-02
+- DATA_SOURCE_MODE 기반 데이터 소스 실행 모드 추가
+- sample_only / crawler_only / mixed 모드 분리
+- DAG 시작 단계에 prepare_raw_sources task 추가
+- Remote OK crawler retry / fallback 처리 추가
+- crawler_only 학습 시 rare class 자동 제외 처리 추가
+- FastAPI 요청/응답/실패/latency 로그 테이블 분리
+- model_predictions에 prediction_source 추가
+- API prediction과 BATCH prediction 저장 경로 분리
+- batch inference는 BATCH 예측만 삭제 후 재생성하도록 수정
+- batch inference 이후 prediction quality gate 추가
+- prediction quality 결과를 pipeline_check_results에 저장
+- API quality / prediction quality 리포트 항목 추가
+- FK 제약조건 및 SQL 문법 오류 트러블슈팅 정리
+```
+
 
 ## 프로젝트 목표
 
 이 프로젝트는 채용공고 데이터를 사용해 아래 흐름을 구성합니다.
 
 ```text
-샘플 채용공고 데이터 생성
-→ 외부 채용공고 수집
+데이터 소스 모드 결정(sample_only / crawler_only / mixed)
+→ 샘플 채용공고 데이터 생성 또는 skip
+→ 외부 채용공고 수집 또는 skip
+→ 외부 수집 실패 시 retry / fallback 처리
 → PostgreSQL raw 테이블 적재
 → 텍스트 정제 / 직무 라벨링 / 기술스택 추출
 → PostgreSQL cleaned / skills 테이블 저장
 → 학습 데이터 품질 체크
 → 검증 결과 저장
+→ rare class 필터링 후 모델 학습
 → TF-IDF + Logistic Regression 모델 학습
 → MLflow 실험 기록
 → 모델 artifact 저장
@@ -24,10 +47,13 @@
 → best model promotion
 → model_registry 저장
 → promoted model 기반 batch inference
-→ model_predictions 테이블 저장
-→ prediction lineage 저장
-→ source별 품질 / lineage 리포트 생성
+→ BATCH prediction 저장
+→ batch prediction quality gate
 → FastAPI 단건 예측
+→ API prediction 저장
+→ FastAPI 요청/응답 로그 저장
+→ prediction lineage 저장
+→ source별 / prediction quality / API quality 리포트 생성
 → FastAPI serving model 자동 reload
 → Airflow DAG로 전체 파이프라인 실행
 ```
@@ -36,9 +62,15 @@
 
 ```mermaid
 flowchart LR
-    A[Sample Job CSV] --> B[raw_job_posts]
-    EXT[Remote OK Job Feed] --> CR[Crawler / Filtering]
-    CR --> B
+    MODE[DATA_SOURCE_MODE] --> PREP[prepare_raw_sources]
+
+    PREP --> A[Sample Job CSV]
+    PREP --> CR[Remote OK Crawler]
+
+    A --> B[raw_job_posts]
+    EXT[Remote OK Job Feed] --> CR
+    CR --> RF[Retry / Fallback]
+    RF --> B
 
     B --> C[Preprocessing]
     C --> D[cleaned_job_posts]
@@ -61,20 +93,25 @@ flowchart LR
     MR --> I[Batch Inference]
     BM --> I
     I --> J[model_predictions]
+    I --> Q3[Prediction Quality Check]
+    Q3 --> QR
 
     MR --> K[FastAPI /predict]
     BM --> K
     K --> J
+    K --> AL[api_prediction_logs]
 
     QR --> R[Pipeline Report]
     MR --> R
     J --> R
+    AL --> R
     D --> R
 
     subgraph Orchestration
         L[Airflow DAG / PythonOperator]
     end
 
+    L --> PREP
     L --> A
     L --> CR
     L --> C
@@ -83,6 +120,7 @@ flowchart LR
     L --> Q2
     L --> P
     L --> I
+    L --> Q3
     L --> R
 ```
 
@@ -152,11 +190,13 @@ Container       : Docker Compose
 ├── src/
 │   ├── common/
 │   │   ├── db.py
+│   │   ├── data_source_mode.py
 │   │   ├── model_registry.py
 │   │   └── prediction_quality.py
 │   ├── crawling/
 │   │   └── crawl_remoteok_jobs.py
 │   ├── ingestion/
+│   │   ├── prepare_raw_sources.py
 │   │   └── load_raw_jobs.py
 │   ├── preprocessing/
 │   │   ├── clean_text.py
@@ -166,7 +206,8 @@ Container       : Docker Compose
 │   ├── quality/
 │   │   ├── check_logger.py
 │   │   ├── check_training_data.py
-│   │   └── check_model_performance.py
+│   │   ├── check_model_performance.py
+│   │   └── check_prediction_quality.py
 │   ├── reporting/
 │   │   └── generate_pipeline_report.py
 │   ├── training/
@@ -222,6 +263,44 @@ Data Analyst
 data/raw/sample_jobs.csv
 ```
 
+### 1-1. 데이터 소스 모드
+
+`src/common/data_source_mode.py`  
+`src/ingestion/prepare_raw_sources.py`
+
+파이프라인 실행 시 사용할 데이터 소스를 환경변수로 제어합니다.
+
+```env
+DATA_SOURCE_MODE=mixed
+```
+
+지원 모드:
+
+```text
+sample_only  : 샘플 CSV 데이터만 사용
+crawler_only : Remote OK 수집 데이터만 사용
+mixed        : 샘플 데이터와 Remote OK 수집 데이터를 함께 사용
+```
+
+DAG 시작 단계에서 `prepare_raw_sources` task가 실행되어 선택한 모드에 맞게 raw/source 데이터를 정리합니다.
+
+```text
+sample_only
+→ sample 외 source raw 제거
+→ sample 생성/적재 task 실행
+→ crawler task skip
+
+crawler_only
+→ sample raw 제거
+→ sample 생성/적재 task skip
+→ crawler task 실행
+
+mixed
+→ sample과 crawler 데이터를 함께 유지
+→ sample 생성/적재 task 실행
+→ crawler task 실행
+```
+
 ### 2. 외부 채용공고 수집
 
 `src/crawling/crawl_remoteok_jobs.py`
@@ -257,6 +336,33 @@ Data Analyst
 title, description, tags 기반 직무 라벨 추론
 Unknown으로 분류되는 공고는 raw 적재 전 제외
 ```
+
+
+### 2-1. 외부 수집 retry / fallback
+
+Remote OK API 호출 실패에 대비해 crawler에 retry와 fallback 처리를 추가했습니다.
+
+환경변수:
+
+```env
+REMOTEOK_MAX_RETRIES=3
+REMOTEOK_RETRY_SLEEP_SECONDS=3
+REMOTEOK_REQUEST_TIMEOUT_SECONDS=30
+REMOTEOK_FALLBACK_TO_EXISTING_RAW=true
+REMOTEOK_MIN_FETCHED_JOBS=1
+```
+
+동작 방식:
+
+```text
+1. Remote OK API 호출
+2. 실패 시 지정 횟수만큼 retry
+3. retry 이후에도 실패하면 기존 raw_job_posts의 remoteok 데이터 확인
+4. 기존 데이터가 있으면 fallback으로 기존 데이터를 사용해 파이프라인 계속 진행
+5. 기존 데이터도 없으면 crawler task 실패
+```
+
+이를 통해 외부 API 일시 장애가 전체 DAG 실패로 바로 이어지지 않도록 개선했습니다.
 
 ### 3. Raw 데이터 적재
 
@@ -369,6 +475,7 @@ Unknown 라벨 비율
 ```text
 DATA_QUALITY
 MODEL_PERFORMANCE
+PREDICTION_QUALITY
 ```
 
 저장 컬럼:
@@ -407,6 +514,22 @@ TF-IDF Vectorizer
 models/job_classifier.pkl
 MLflow experiment/run 기록
 MLflow model artifact 저장
+```
+
+
+`crawler_only` 모드에서는 실제 외부 데이터 분포가 치우칠 수 있으므로, stratified split이 불가능한 rare class를 학습 전에 제외합니다.
+
+```text
+MIN_SAMPLES_PER_CLASS보다 적은 라벨
+→ 학습 데이터에서 제외
+→ 남은 라벨 기준으로 stratified train/test split 수행
+```
+
+관련 환경변수:
+
+```env
+MIN_SAMPLES_PER_CLASS=2
+TEST_SIZE=0.3
 ```
 
 ### 9. MLflow Tracking
@@ -524,6 +647,44 @@ LOW    : confidence < 0.6
 
 이를 통해 예측 결과가 낮은 신뢰도인지, 상위 후보군이 어떻게 분포하는지 확인할 수 있습니다.
 
+### 13-1. Prediction Quality Gate
+
+`src/quality/check_prediction_quality.py`
+
+batch inference 이후 예측 결과 품질을 검증합니다.
+
+검증 항목:
+
+```text
+prediction_count
+avg_prediction_confidence
+low_confidence_ratio
+null_confidence_count
+```
+
+환경변수:
+
+```env
+MIN_AVG_PREDICTION_CONFIDENCE=0.6
+MAX_LOW_CONFIDENCE_RATIO=0.4
+MIN_PREDICTION_ROWS=1
+```
+
+검증 결과는 `pipeline_check_results`에 `PREDICTION_QUALITY` 타입으로 저장됩니다.
+
+DAG 흐름:
+
+```text
+batch_inference
+    ↓
+check_prediction_quality
+    ↓
+generate_pipeline_report
+```
+
+예측 품질 기준을 통과하지 못하면 DAG를 실패시켜, 낮은 품질의 예측 결과가 정상 산출물처럼 리포트되지 않도록 합니다.
+
+
 ### 14. Batch Inference
 
 `src/inference/batch_inference.py`
@@ -538,6 +699,19 @@ cleaned_job_posts
 ```
 
 batch inference 결과에는 예측값, confidence, top-k 후보, model lineage가 함께 저장됩니다.
+
+`model_predictions.prediction_source`에는 `BATCH`가 저장됩니다.
+
+```text
+prediction_source = BATCH
+```
+
+API 예측 로그가 `model_predictions`를 FK로 참조할 수 있기 때문에, batch inference 재실행 시 `model_predictions` 전체를 TRUNCATE하지 않습니다. 대신 batch 결과만 삭제 후 재생성합니다.
+
+```sql
+DELETE FROM model_predictions
+WHERE COALESCE(prediction_source, 'BATCH') = 'BATCH';
+```
 
 ### 15. FastAPI
 
@@ -564,7 +738,20 @@ low confidence 여부 반환
 top-k prediction 반환
 기술스택 추출
 model_predictions 테이블 저장
+api_prediction_logs 테이블 저장
 model lineage 저장
+latency_ms 저장
+성공/실패 status 저장
+```
+
+API 예측은 `model_predictions.prediction_source = API`로 저장되며, API 요청/응답 로그는 `api_prediction_logs`에 별도로 저장됩니다.
+
+```text
+model_predictions
+→ 모델 예측 결과 저장
+
+api_prediction_logs
+→ FastAPI 요청/응답/실패/latency 로그 저장
 ```
 
 FastAPI는 시작 시점에 모델을 로드하며, 요청 시점에 현재 promoted model metadata를 확인합니다. 모델 파일 또는 registry 정보가 변경되면 새 모델을 자동으로 reload합니다.
@@ -601,6 +788,12 @@ Job Category Distribution by Source
 Skill Extraction Summary by Source
 Top Skills by Source
 Prediction Summary by Source
+Prediction Quality Check Results
+Prediction Quality Summary
+Prediction Quality by Category
+API Request Quality Summary
+API Low Confidence Summary
+Recent API Prediction Logs
 ```
 
 이를 통해 현재 서빙 모델, 모델 승격 이력, 예측 lineage, 데이터/모델 검증 결과, source별 데이터 품질을 한 번에 확인할 수 있습니다.
@@ -612,6 +805,8 @@ Prediction Summary by Source
 전체 파이프라인을 아래 순서로 실행합니다.
 
 ```text
+prepare_raw_sources
+    ↓
 generate_sample_jobs
     ↓
 load_raw_jobs
@@ -629,6 +824,8 @@ check_model_performance
 promote_model
     ↓
 batch_inference
+    ↓
+check_prediction_quality
     ↓
 generate_pipeline_report
 ```
@@ -689,6 +886,7 @@ raw_job_posts
 cleaned_job_posts
 job_post_skills
 model_predictions
+api_prediction_logs
 pipeline_check_results
 model_registry
 ```
@@ -711,8 +909,14 @@ job_post_skills
 
 model_predictions
 - FastAPI 또는 batch inference 예측 결과 저장
+- prediction_source로 API / BATCH 구분
 - 예측에 사용된 모델 lineage 저장
 - confidence / top-k prediction 저장
+
+api_prediction_logs
+- FastAPI 요청/응답/실패/latency 로그 저장
+- model_predictions.prediction_id와 연결
+- API 운영 관점의 request/response 추적
 
 pipeline_check_results
 - 데이터 품질 체크 결과 저장
@@ -738,6 +942,10 @@ cleaned_job_posts
 model_registry
     ↑
     └── model_predictions.model_registry_id
+
+model_predictions
+    ↑
+    └── api_prediction_logs.prediction_id
 ```
 
 <img src="docs/images/postgresql.png" width="900">
@@ -777,18 +985,30 @@ AIRFLOW_FERNET_KEY=change_me
 MIN_TRAINING_ROWS=50
 MIN_CATEGORY_COUNT=2
 MAX_UNKNOWN_RATIO=0.5
+MIN_SAMPLES_PER_CLASS=2
+TEST_SIZE=0.3
 
 MIN_MODEL_ACCURACY=0.7
 MIN_MODEL_F1_WEIGHTED=0.7
 
 LOW_CONFIDENCE_THRESHOLD=0.6
 PREDICTION_TOP_K=3
+MIN_AVG_PREDICTION_CONFIDENCE=0.6
+MAX_LOW_CONFIDENCE_RATIO=0.4
+MIN_PREDICTION_ROWS=1
 
 REMOTEOK_API_URL=https://remoteok.com/api
 REMOTEOK_CRAWL_LIMIT=50
 REMOTEOK_SCAN_LIMIT=1000
 REMOTEOK_FILTER_ENABLED=true
 REMOTEOK_MIN_RELEVANCE_SCORE=2
+REMOTEOK_MAX_RETRIES=3
+REMOTEOK_RETRY_SLEEP_SECONDS=3
+REMOTEOK_REQUEST_TIMEOUT_SECONDS=30
+REMOTEOK_FALLBACK_TO_EXISTING_RAW=true
+REMOTEOK_MIN_FETCHED_JOBS=1
+
+DATA_SOURCE_MODE=mixed
 ```
 
 로컬 Python에서 직접 실행할 경우에는 `DB_HOST=localhost`로 변경합니다.
@@ -1068,6 +1288,8 @@ docker compose exec airflow-scheduler airflow tasks states-for-dag-run jobskill_
 Airflow DAG를 통해 전체 파이프라인이 아래 순서로 실행됩니다.
 
 ```text
+prepare_raw_sources
+    ↓
 generate_sample_jobs
     ↓
 load_raw_jobs
@@ -1086,12 +1308,15 @@ promote_model
     ↓
 batch_inference
     ↓
+check_prediction_quality
+    ↓
 generate_pipeline_report
 ```
 
 정상 상태 예시:
 
 ```text
+prepare_raw_sources         success
 generate_sample_jobs         success
 load_raw_jobs                success
 crawl_remoteok_jobs          success
@@ -1101,6 +1326,7 @@ train_model                  success
 check_model_performance      success
 promote_model                success
 batch_inference              success
+check_prediction_quality      success
 generate_pipeline_report     success
 ```
 
@@ -1113,6 +1339,7 @@ SELECT COUNT(*) FROM job_post_skills;
 SELECT COUNT(*) FROM pipeline_check_results;
 SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
+SELECT COUNT(*) FROM api_prediction_logs;
 ```
 
 ## 로컬 Python 스크립트 실행 순서
@@ -1120,6 +1347,7 @@ SELECT COUNT(*) FROM model_predictions;
 Airflow 없이 개별 스크립트로 실행할 수도 있습니다.
 
 ```bash
+python src/ingestion/prepare_raw_sources.py
 python scripts/generate_sample_jobs.py
 python src/ingestion/load_raw_jobs.py
 python src/crawling/crawl_remoteok_jobs.py
@@ -1129,12 +1357,14 @@ python src/training/train_baseline.py
 python src/quality/check_model_performance.py
 python src/training/promote_model.py
 python src/inference/batch_inference.py
+python src/quality/check_prediction_quality.py
 python src/reporting/generate_pipeline_report.py
 ```
 
 컨테이너 내부에서 실행할 경우:
 
 ```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/ingestion/prepare_raw_sources.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/generate_sample_jobs.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/ingestion/load_raw_jobs.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/crawling/crawl_remoteok_jobs.py"
@@ -1144,6 +1374,7 @@ docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytho
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_performance.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/training/promote_model.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/inference/batch_inference.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_prediction_quality.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
 ```
 
@@ -1234,6 +1465,8 @@ curl -X POST "http://localhost:8000/predict" \
   ],
   "skills": ["Airflow", "Kafka", "Python", "Spark", "SQL"],
   "prediction_id": 1,
+  "prediction_source": "API",
+  "api_log_id": 1,
   "model_name": "job_classifier",
   "model_run_id": "472340fc8ca14b50a382dd46f61108bf",
   "model_registry_id": 1,
@@ -1264,6 +1497,7 @@ SELECT COUNT(*) FROM job_post_skills;
 SELECT COUNT(*) FROM pipeline_check_results;
 SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
+SELECT COUNT(*) FROM api_prediction_logs;
 ```
 
 source별 raw 데이터 확인:
@@ -1404,6 +1638,52 @@ ORDER BY mp.id
 LIMIT 20;
 ```
 
+
+API / BATCH 예측 구분 확인:
+
+```sql
+SELECT
+    prediction_source,
+    COUNT(*) AS cnt
+FROM model_predictions
+GROUP BY prediction_source
+ORDER BY prediction_source;
+```
+
+API 요청 로그 확인:
+
+```sql
+SELECT
+    id,
+    prediction_id,
+    request_title,
+    response_category,
+    response_confidence_level,
+    status,
+    ROUND(latency_ms::numeric, 2) AS latency_ms,
+    created_at
+FROM api_prediction_logs
+ORDER BY id DESC
+LIMIT 10;
+```
+
+Prediction quality check 결과 확인:
+
+```sql
+SELECT
+    check_type,
+    check_name,
+    status,
+    ROUND(metric_value::numeric, 4) AS metric_value,
+    ROUND(threshold_value::numeric, 4) AS threshold_value,
+    message,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type = 'PREDICTION_QUALITY'
+ORDER BY id DESC
+LIMIT 20;
+```
+
 ## Pipeline Report 생성
 
 리포트 생성:
@@ -1430,6 +1710,10 @@ source별 Unknown 비율
 source별 라벨 분포
 source별 skill 추출 결과
 source별 prediction confidence
+prediction quality gate 결과
+API 요청 성공/실패율
+API low confidence 비율
+최근 API prediction logs
 ```
 
 ## 테스트 실행
@@ -1805,6 +2089,163 @@ preprocess_db.py에서 tags를 description과 함께 라벨링에 사용
 label_jobs.py의 직무별 keyword 확장
 ```
 
+
+### 12. crawler_only 학습 시 stratified split 실패
+
+증상:
+
+```text
+ValueError: The least populated classes in y have only 1 member
+```
+
+원인:
+
+```text
+crawler_only 모드에서는 실제 수집 데이터 분포가 치우쳐 특정 직무 라벨이 1건만 존재할 수 있음
+stratify=y를 사용하는 train_test_split은 클래스별 최소 2건 이상이 필요함
+```
+
+해결:
+
+```text
+train_baseline.py에서 MIN_SAMPLES_PER_CLASS보다 적은 rare class를 학습 데이터에서 제외
+TEST_SIZE를 class 개수 이상으로 보정
+```
+
+환경변수:
+
+```env
+MIN_SAMPLES_PER_CLASS=2
+TEST_SIZE=0.3
+```
+
+### 13. api_prediction_logs FK로 인한 batch inference TRUNCATE 실패
+
+증상:
+
+```text
+cannot truncate a table referenced in a foreign key constraint
+Table "api_prediction_logs" references "model_predictions"
+```
+
+원인:
+
+```text
+api_prediction_logs.prediction_id가 model_predictions.id를 참조하므로
+model_predictions만 단독 TRUNCATE할 수 없음
+```
+
+해결:
+
+```text
+model_predictions에 prediction_source 컬럼 추가
+API 예측은 prediction_source = API
+batch 예측은 prediction_source = BATCH
+batch inference는 BATCH row만 DELETE 후 재생성
+```
+
+```sql
+DELETE FROM model_predictions
+WHERE COALESCE(prediction_source, 'BATCH') = 'BATCH';
+```
+
+### 14. batch inference INSERT 컬럼 개수 불일치
+
+증상:
+
+```text
+INSERT has more expressions than target columns
+```
+
+원인:
+
+```text
+VALUES에는 prediction_source를 넣었지만
+INSERT INTO model_predictions 컬럼 목록에 prediction_source가 빠져 있었음
+```
+
+해결:
+
+```sql
+INSERT INTO model_predictions (
+    job_post_id,
+    prediction_source,
+    model_name,
+    model_version,
+    model_run_id,
+    model_registry_id,
+    model_path,
+    predicted_category,
+    confidence,
+    confidence_level,
+    is_low_confidence,
+    top_predictions
+)
+```
+
+### 15. check_prediction_quality SQL JOIN 문법 오류
+
+증상:
+
+```text
+syntax error at or near "JOIN"
+```
+
+원인:
+
+```text
+SQL 작성 시 WHERE가 JOIN보다 먼저 배치됨
+```
+
+잘못된 예:
+
+```sql
+FROM model_predictions mp
+WHERE COALESCE(mp.prediction_source, 'BATCH') = 'BATCH'
+JOIN cleaned_job_posts c
+    ON mp.job_post_id = c.id
+```
+
+정상:
+
+```sql
+FROM model_predictions mp
+JOIN cleaned_job_posts c
+    ON mp.job_post_id = c.id
+WHERE COALESCE(mp.prediction_source, 'BATCH') = 'BATCH'
+```
+
+### 16. Prediction quality gate 실패
+
+증상:
+
+```text
+avg_prediction_confidence failed
+low_confidence_ratio failed
+```
+
+원인:
+
+```text
+batch inference 결과의 평균 confidence가 기준보다 낮거나
+low confidence 비율이 허용 기준보다 높음
+```
+
+확인:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_prediction_quality.py"
+```
+
+임시 기준 완화:
+
+```env
+MIN_AVG_PREDICTION_CONFIDENCE=0.3
+MAX_LOW_CONFIDENCE_RATIO=0.8
+```
+
+단, 포트폴리오 관점에서는 기준을 낮추는 것보다 source별 / category별 confidence 리포트로 품질 이슈를 드러내는 것이 더 자연스럽습니다.
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -1832,6 +2273,13 @@ source별 데이터 품질 리포트 구성
 pytest 기반 단위 테스트 추가
 Docker Compose 기반 MLOps 개발 환경 구성
 Git history에 포함된 secret 제거 및 secret rotation 수행
+DATA_SOURCE_MODE 기반 sample/crawler/mixed 실행 모드 구성
+외부 API 수집 실패에 대한 retry / fallback 처리 구성
+FastAPI 요청/응답/실패/latency 로그 테이블 분리
+API prediction과 batch prediction 저장 경로 분리
+FK 제약조건을 고려한 batch inference 재실행 방식 개선
+prediction quality gate를 통한 batch inference 결과 검증
+source/category별 prediction confidence 분석 리포트 구성
 ```
 
 ## 현재 완료된 범위
@@ -1871,16 +2319,30 @@ Git history secret 제거
 실행용 secret rotation
 README 스크린샷 추가
 포트폴리오용 README 보안 정리
+DATA_SOURCE_MODE 기반 데이터 소스 모드 분리
+prepare_raw_sources task 추가
+sample_only / crawler_only / mixed 실행 모드 추가
+Remote OK retry / fallback 처리 추가
+crawler_only 학습 rare class 제외 처리 추가
+api_prediction_logs 테이블 추가
+FastAPI 요청/응답/실패/latency 로그 저장 추가
+model_predictions prediction_source 추가
+API / BATCH prediction 저장 구분 추가
+batch inference BATCH row만 삭제 후 재생성하도록 개선
+check_prediction_quality.py 추가
+prediction quality gate DAG 추가
+API quality / prediction quality 리포트 항목 추가
+FK / SQL / INSERT 컬럼 불일치 트러블슈팅 정리
 ```
 
 ## 다음 개선 예정
 
 ```text
-크롤링 데이터 저장 모드 분리(sample only / crawler only / mixed)
-외부 채용공고 수집 실패 시 retry / fallback 처리
-FastAPI 예측 요청/응답 로그 테이블 분리
-prediction quality 기반 알림 또는 리포트 강화
 GitHub Actions 기반 pytest 자동 실행
 간단한 Streamlit 또는 Grafana 대시보드 추가
+prediction quality 기반 Slack/Email 알림 추가
+크롤링 source 추가 또는 수집 데이터 다양화
 실제 운영 환경 기준 README 아키텍처 다이어그램 보강
+모델 성능 개선을 위한 데이터 라벨링/피처 개선
+API 요청 로그 기반 모니터링 지표 시각화
 ```

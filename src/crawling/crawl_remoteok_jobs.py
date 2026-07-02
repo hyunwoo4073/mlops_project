@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
+from requests import RequestException
 from sqlalchemy import text
 
 
@@ -16,142 +18,26 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.common.db import get_engine
-from src.preprocessing.label_jobs import get_label_scores, label_job
+from src.preprocessing.label_jobs import label_job
+
 
 REMOTEOK_API_URL = os.getenv("REMOTEOK_API_URL", "https://remoteok.com/api")
+
 CRAWL_LIMIT = int(os.getenv("REMOTEOK_CRAWL_LIMIT", "50"))
-SCAN_LIMIT = int(os.getenv("REMOTEOK_SCAN_LIMIT", "200"))
+SCAN_LIMIT = int(os.getenv("REMOTEOK_SCAN_LIMIT", "1000"))
 FILTER_ENABLED = os.getenv("REMOTEOK_FILTER_ENABLED", "true").lower() == "true"
-MIN_RELEVANCE_SCORE = int(os.getenv("REMOTEOK_MIN_RELEVANCE_SCORE", "2"))
+
+MAX_RETRIES = int(os.getenv("REMOTEOK_MAX_RETRIES", "3"))
+RETRY_SLEEP_SECONDS = int(os.getenv("REMOTEOK_RETRY_SLEEP_SECONDS", "3"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REMOTEOK_REQUEST_TIMEOUT_SECONDS", "30"))
+
+FALLBACK_TO_EXISTING_RAW = (
+    os.getenv("REMOTEOK_FALLBACK_TO_EXISTING_RAW", "true").lower() == "true"
+)
+
+MIN_FETCHED_JOBS = int(os.getenv("REMOTEOK_MIN_FETCHED_JOBS", "1"))
 
 SOURCE_NAME = "remoteok"
-
-RELEVANT_KEYWORDS: dict[str, int] = {
-    # 직무명
-    "data engineer": 5,
-    "backend": 5,
-    "back-end": 5,
-    "software engineer": 5,
-    "developer": 4,
-    "devops": 5,
-    "sre": 5,
-    "ml engineer": 5,
-    "machine learning": 5,
-    "data analyst": 5,
-    "analytics": 4,
-
-    # 데이터 / 백엔드 / ML / DevOps 기술
-    "python": 3,
-    "sql": 3,
-    "spark": 4,
-    "airflow": 4,
-    "kafka": 4,
-    "hadoop": 4,
-    "etl": 4,
-    "data pipeline": 4,
-    "java": 3,
-    "spring": 3,
-    "api": 3,
-    "fastapi": 3,
-    "django": 3,
-    "node": 3,
-    "typescript": 3,
-    "javascript": 2,
-    "postgresql": 3,
-    "mysql": 2,
-    "redis": 2,
-    "docker": 3,
-    "kubernetes": 4,
-    "k8s": 4,
-    "terraform": 3,
-    "ansible": 3,
-    "prometheus": 3,
-    "grafana": 3,
-    "tensorflow": 4,
-    "pytorch": 4,
-    "mlflow": 4,
-    "tableau": 3,
-    "power bi": 3,
-    "dashboard": 3,
-}
-
-EXCLUDE_KEYWORDS = {
-    "warehouse",
-    "counsel",
-    "legal",
-    "attorney",
-    "nurse",
-    "doctor",
-    "sales representative",
-    "customer support",
-    "administrative assistant",
-    "human resources",
-    "recruiter",
-    "accountant",
-    "finance",
-}
-
-def normalize_text(text: str | None) -> str:
-    if not text:
-        return ""
-
-    text_value = text.lower()
-    text_value = re.sub(r"\s+", " ", text_value)
-
-    return text_value.strip()
-
-
-def calculate_relevance_score(job: dict[str, Any]) -> int:
-    search_text = normalize_text(
-        " ".join(
-            [
-                str(job.get("title", "")),
-                str(job.get("description", "")),
-                str(job.get("tags", "")),
-            ]
-        )
-    )
-
-    if not search_text:
-        return 0
-
-    for exclude_keyword in EXCLUDE_KEYWORDS:
-        if exclude_keyword in search_text:
-            return 0
-
-    score = 0
-
-    for keyword, weight in RELEVANT_KEYWORDS.items():
-        if keyword in search_text:
-            score += weight
-
-    return score
-
-
-def infer_job_category(job: dict[str, Any]) -> str:
-    title = str(job.get("title", ""))
-
-    # Remote OK의 tags도 라벨링 힌트로 같이 사용한다.
-    description = " ".join(
-        [
-            str(job.get("description", "")),
-            str(job.get("tags", "")),
-        ]
-    )
-
-    return label_job(title=title, description=description)
-
-
-def is_relevant_job(job: dict[str, Any]) -> bool:
-    if not FILTER_ENABLED:
-        return True
-
-    inferred_category = infer_job_category(job)
-
-    if inferred_category == "Unknown":
-        return False
-
-    return True
 
 
 def clean_html(raw_html: str | None) -> str:
@@ -175,28 +61,75 @@ def normalize_tags(tags: Any) -> str:
     return str(tags)
 
 
-def fetch_remoteok_jobs() -> list[dict[str, Any]]:
+def infer_job_category(job: dict[str, Any]) -> str:
+    title = str(job.get("title", ""))
+
+    # Remote OK는 tags에 직무/기술 힌트가 많이 들어있으므로 description과 같이 사용한다.
+    description = " ".join(
+        [
+            str(job.get("description", "")),
+            str(job.get("tags", "")),
+        ]
+    )
+
+    return label_job(title=title, description=description)
+
+
+def is_relevant_job(job: dict[str, Any]) -> bool:
+    if not FILTER_ENABLED:
+        return True
+
+    inferred_category = infer_job_category(job)
+
+    return inferred_category != "Unknown"
+
+
+def request_remoteok_payload() -> list[dict[str, Any]]:
     headers = {
         "User-Agent": "jobskill-mlops-portfolio/1.0",
         "Accept": "application/json",
     }
 
-    response = requests.get(
-        REMOTEOK_API_URL,
-        headers=headers,
-        timeout=30,
-    )
-    response.raise_for_status()
+    last_error: Exception | None = None
 
-    payload = response.json()
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"request_attempt: {attempt}/{MAX_RETRIES}")
 
-    if not isinstance(payload, list):
-        raise ValueError("Unexpected Remote OK response format. Expected list.")
+            response = requests.get(
+                REMOTEOK_API_URL,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+
+            payload = response.json()
+
+            if not isinstance(payload, list):
+                raise ValueError("Unexpected Remote OK response format. Expected list.")
+
+            return payload
+
+        except (RequestException, ValueError) as exc:
+            last_error = exc
+            print(f"request_failed : {type(exc).__name__}: {exc}")
+
+            if attempt < MAX_RETRIES:
+                print(f"retry_after_seconds: {RETRY_SLEEP_SECONDS}")
+                time.sleep(RETRY_SLEEP_SECONDS)
+
+    raise RuntimeError(
+        f"Failed to fetch Remote OK jobs after {MAX_RETRIES} attempts."
+    ) from last_error
+
+
+def fetch_remoteok_jobs() -> list[dict[str, Any]]:
+    payload = request_remoteok_payload()
 
     jobs = []
-
     scanned_count = 0
     filtered_out_count = 0
+    invalid_count = 0
 
     for item in payload:
         if not isinstance(item, dict):
@@ -213,6 +146,7 @@ def fetch_remoteok_jobs() -> list[dict[str, Any]]:
         description = item.get("description")
 
         if not title or not company:
+            invalid_count += 1
             continue
 
         external_id = str(
@@ -257,9 +191,29 @@ def fetch_remoteok_jobs() -> list[dict[str, Any]]:
             break
 
     print(f"scanned_jobs     : {scanned_count}")
+    print(f"invalid_jobs     : {invalid_count}")
     print(f"filtered_out_jobs: {filtered_out_count}")
+    print(f"selected_jobs    : {len(jobs)}")
 
     return jobs
+
+
+def count_existing_remoteok_rows() -> int:
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        count = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM raw_job_posts
+                WHERE source = :source
+                """
+            ),
+            {"source": SOURCE_NAME},
+        ).scalar_one()
+
+    return int(count)
 
 
 def insert_raw_jobs(jobs: list[dict[str, Any]]) -> int:
@@ -312,19 +266,19 @@ def insert_raw_jobs(jobs: list[dict[str, Any]]) -> int:
     payload = []
     for job in jobs:
         payload.append(
-        {
-            "source": job["source"],
-            "source_job_id": job["source_job_id"],
-            "external_id": job["external_id"],
-            "source_url": job["source_url"],
-            "title": job["title"],
-            "company": job["company"],
-            "location": job["location"],
-            "description": job["description"],
-            "tags": job["tags"],
-            "crawled_at": now,
-        }
-    )
+            {
+                "source": job["source"],
+                "source_job_id": job["source_job_id"],
+                "external_id": job["external_id"],
+                "source_url": job["source_url"],
+                "title": job["title"],
+                "company": job["company"],
+                "location": job["location"],
+                "description": job["description"],
+                "tags": job["tags"],
+                "crawled_at": now,
+            }
+        )
 
     with engine.begin() as conn:
         conn.execute(insert_sql, payload)
@@ -332,18 +286,65 @@ def insert_raw_jobs(jobs: list[dict[str, Any]]) -> int:
     return len(payload)
 
 
+def fallback_to_existing_raw(reason: str) -> bool:
+    if not FALLBACK_TO_EXISTING_RAW:
+        return False
+
+    existing_count = count_existing_remoteok_rows()
+
+    if existing_count <= 0:
+        print("fallback_available: false")
+        print("existing_remoteok_rows: 0")
+        return False
+
+    print("\n[Remote OK Fallback]")
+    print(f"reason                : {reason}")
+    print("fallback_available    : true")
+    print(f"existing_remoteok_rows: {existing_count}")
+    print("action                : keep existing raw_job_posts rows and continue")
+
+    return True
+
+
 def main() -> None:
     print("\n[Remote OK Crawler]")
-    print(f"api_url    : {REMOTEOK_API_URL}")
-    print(f"crawl_limit: {CRAWL_LIMIT}")
+    print(f"api_url       : {REMOTEOK_API_URL}")
+    print(f"crawl_limit   : {CRAWL_LIMIT}")
+    print(f"scan_limit    : {SCAN_LIMIT}")
+    print(f"filter        : {FILTER_ENABLED}")
+    print(f"max_retries   : {MAX_RETRIES}")
+    print(f"retry_sleep   : {RETRY_SLEEP_SECONDS}")
+    print(f"timeout       : {REQUEST_TIMEOUT_SECONDS}")
+    print(f"fallback      : {FALLBACK_TO_EXISTING_RAW}")
+    print(f"min_fetched   : {MIN_FETCHED_JOBS}")
 
-    jobs = fetch_remoteok_jobs()
+    try:
+        jobs = fetch_remoteok_jobs()
+
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+
+        if fallback_to_existing_raw(reason=reason):
+            return
+
+        raise
+
+    if len(jobs) < MIN_FETCHED_JOBS:
+        reason = (
+            f"Fetched jobs below minimum. "
+            f"selected_jobs={len(jobs)}, required={MIN_FETCHED_JOBS}"
+        )
+
+        if fallback_to_existing_raw(reason=reason):
+            return
+
+        raise ValueError(reason)
 
     print(f"fetched_jobs: {len(jobs)}")
 
-    inserted_count = insert_raw_jobs(jobs)
+    upserted_count = insert_raw_jobs(jobs)
 
-    print(f"upserted_raw_jobs: {inserted_count}")
+    print(f"upserted_raw_jobs: {upserted_count}")
 
     if jobs:
         print("\n[Sample Crawled Job]")

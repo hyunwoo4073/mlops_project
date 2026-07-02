@@ -12,14 +12,44 @@ default_args = {
 }
 
 
+def run_prepare_raw_sources():
+    from src.ingestion.prepare_raw_sources import main
+
+    main()
+
+
 def run_generate_sample_jobs():
+    from src.common.data_source_mode import should_use_sample_data
+
+    if not should_use_sample_data():
+        print("Skip generate_sample_jobs because DATA_SOURCE_MODE does not use sample data.")
+        return
+
     from scripts.generate_sample_jobs import main
 
     main()
 
 
 def run_load_raw_jobs():
+    from src.common.data_source_mode import should_use_sample_data
+
+    if not should_use_sample_data():
+        print("Skip load_raw_jobs because DATA_SOURCE_MODE does not use sample data.")
+        return
+
     from src.ingestion.load_raw_jobs import main
+
+    main()
+
+
+def run_crawl_remoteok_jobs():
+    from src.common.data_source_mode import should_use_crawler_data
+
+    if not should_use_crawler_data():
+        print("Skip crawl_remoteok_jobs because DATA_SOURCE_MODE does not use crawler data.")
+        return
+
+    from src.crawling.crawl_remoteok_jobs import main
 
     main()
 
@@ -66,9 +96,14 @@ def run_generate_pipeline_report():
     main()
 
 
+def run_check_prediction_quality():
+    from src.quality.check_prediction_quality import main
+
+    main()
+
 with DAG(
     dag_id="jobskill_mlops_pipeline",
-    description="JobSkill MLOps pipeline with validation, model promotion, lineage, and reporting",
+    description="JobSkill MLOps pipeline with validation, model promotion, lineage, reporting, and data source modes",
     default_args=default_args,
     start_date=datetime(2026, 1, 1),
     schedule=None,
@@ -76,6 +111,11 @@ with DAG(
     max_active_runs=1,
     tags=["jobskill", "mlops", "postgresql", "mlflow"],
 ) as dag:
+
+    prepare_raw_sources = PythonOperator(
+        task_id="prepare_raw_sources",
+        python_callable=run_prepare_raw_sources,
+    )
 
     generate_sample_jobs = PythonOperator(
         task_id="generate_sample_jobs",
@@ -85,6 +125,11 @@ with DAG(
     load_raw_jobs = PythonOperator(
         task_id="load_raw_jobs",
         python_callable=run_load_raw_jobs,
+    )
+
+    crawl_remoteok_jobs = PythonOperator(
+        task_id="crawl_remoteok_jobs",
+        python_callable=run_crawl_remoteok_jobs,
     )
 
     preprocess_jobs = PythonOperator(
@@ -122,14 +167,22 @@ with DAG(
         python_callable=run_generate_pipeline_report,
     )
 
+    check_prediction_quality = PythonOperator(
+        task_id="check_prediction_quality",
+        python_callable=run_check_prediction_quality,
+    )
+
     (
-        generate_sample_jobs
+        prepare_raw_sources
+        >> generate_sample_jobs
         >> load_raw_jobs
+        >> crawl_remoteok_jobs
         >> preprocess_jobs
         >> check_training_data
         >> train_model
         >> check_model_performance
         >> promote_model
         >> batch_inference
+        >> check_prediction_quality
         >> generate_pipeline_report
     )
