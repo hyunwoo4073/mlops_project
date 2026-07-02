@@ -1,21 +1,22 @@
+import json
 import sys
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 import joblib
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-import json
-from src.common.prediction_quality import build_prediction_quality
 
 # 프로젝트 루트를 import path에 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.common.db import get_engine
 from src.common.model_registry import ModelMetadata, get_current_model_metadata
+from src.common.prediction_quality import build_prediction_quality
 from src.preprocessing.clean_text import clean_text
 from src.preprocessing.extract_skills import extract_skills
 
@@ -23,6 +24,8 @@ from src.preprocessing.extract_skills import extract_skills
 app = FastAPI(title="JobSkill MLOps API")
 
 engine = get_engine()
+
+PREDICTION_SOURCE_API = "API"
 
 
 class ModelStore:
@@ -91,9 +94,13 @@ class PredictResponse(BaseModel):
     confidence: float | None
     confidence_level: str | None = None
     is_low_confidence: bool | None = None
-    top_predictions: list[dict] = []
-    skills: list[str]
+    top_predictions: list[dict] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+
     prediction_id: int | None
+    prediction_source: str | None = None
+    api_log_id: int | None = None
+
     model_name: str | None = None
     model_run_id: str | None = None
     model_registry_id: int | None = None
@@ -146,81 +153,232 @@ def reload_model():
     }
 
 
-@app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
-    model, metadata = model_store.load_if_needed()
-
-    cleaned_title = clean_text(req.title)
-    cleaned_description = clean_text(req.description)
-
-    text_for_model = cleaned_title + " " + cleaned_description
-
-    pred = model.predict([text_for_model])[0]
-
-    quality = build_prediction_quality(model, [text_for_model])[0]
-    confidence = quality.confidence
-
-    skills = extract_skills(text_for_model)
-
+def insert_api_prediction_log(
+    *,
+    req: PredictRequest,
+    prediction_id: int | None,
+    response_payload: dict | None,
+    metadata: ModelMetadata | None,
+    status: str,
+    error_message: str | None,
+    latency_ms: float,
+) -> int:
     insert_sql = text("""
-        INSERT INTO model_predictions (
-            job_post_id,
+        INSERT INTO api_prediction_logs (
+            prediction_id,
+            request_title,
+            request_description,
+            request_job_post_id,
+
+            response_category,
+            response_confidence,
+            response_confidence_level,
+            response_is_low_confidence,
+            response_top_predictions,
+            response_skills,
+
             model_name,
-            model_version,
             model_run_id,
             model_registry_id,
             model_path,
-            predicted_category,
-            confidence,
-            confidence_level,
-            is_low_confidence,
-            top_predictions
+
+            status,
+            error_message,
+            latency_ms
         )
         VALUES (
-            :job_post_id,
+            :prediction_id,
+            :request_title,
+            :request_description,
+            :request_job_post_id,
+
+            :response_category,
+            :response_confidence,
+            :response_confidence_level,
+            :response_is_low_confidence,
+            CAST(:response_top_predictions AS jsonb),
+            CAST(:response_skills AS jsonb),
+
             :model_name,
-            :model_version,
             :model_run_id,
             :model_registry_id,
             :model_path,
-            :predicted_category,
-            :confidence,
-            :confidence_level,
-            :is_low_confidence,
-            CAST(:top_predictions AS jsonb)
+
+            :status,
+            :error_message,
+            :latency_ms
         )
         RETURNING id
     """)
+
+    response_payload = response_payload or {}
+
     with engine.begin() as conn:
         result = conn.execute(
             insert_sql,
             {
-                "job_post_id": req.job_post_id,
-                "model_name": metadata.model_name,
-                "model_version": metadata.run_id or metadata.status,
-                "model_run_id": metadata.run_id,
-                "model_registry_id": metadata.model_registry_id,
-                "model_path": str(metadata.model_path),
-                "predicted_category": str(pred),
-                "confidence": confidence,
-                "confidence_level": quality.confidence_level,
-                "is_low_confidence": quality.is_low_confidence,
-                "top_predictions": json.dumps(quality.top_predictions, ensure_ascii=False),
-            }
+                "prediction_id": prediction_id,
+                "request_title": req.title,
+                "request_description": req.description,
+                "request_job_post_id": req.job_post_id,
+
+                "response_category": response_payload.get("job_category"),
+                "response_confidence": response_payload.get("confidence"),
+                "response_confidence_level": response_payload.get("confidence_level"),
+                "response_is_low_confidence": response_payload.get("is_low_confidence"),
+                "response_top_predictions": json.dumps(
+                    response_payload.get("top_predictions") or [],
+                    ensure_ascii=False,
+                ),
+                "response_skills": json.dumps(
+                    response_payload.get("skills") or [],
+                    ensure_ascii=False,
+                ),
+
+                "model_name": metadata.model_name if metadata else None,
+                "model_run_id": metadata.run_id if metadata else None,
+                "model_registry_id": metadata.model_registry_id if metadata else None,
+                "model_path": str(metadata.model_path) if metadata else None,
+
+                "status": status,
+                "error_message": error_message,
+                "latency_ms": latency_ms,
+            },
         )
 
-        prediction_id = result.scalar_one()
+        return result.scalar_one()
 
-    return {
-        "job_category": str(pred),
-        "confidence": confidence,
-        "confidence_level": quality.confidence_level,
-        "is_low_confidence": quality.is_low_confidence,
-        "top_predictions": quality.top_predictions,
-        "skills": skills,
-        "prediction_id": prediction_id,
-        "model_name": metadata.model_name,
-        "model_run_id": metadata.run_id,
-        "model_registry_id": metadata.model_registry_id,
-        "model_path": str(metadata.model_path),
-    }
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(req: PredictRequest):
+    started_at = time.perf_counter()
+
+    metadata = None
+    prediction_id = None
+    response_payload = None
+
+    try:
+        model, metadata = model_store.load_if_needed()
+
+        cleaned_title = clean_text(req.title)
+        cleaned_description = clean_text(req.description)
+
+        text_for_model = f"{cleaned_title} {cleaned_description}".strip()
+
+        pred = model.predict([text_for_model])[0]
+
+        quality = build_prediction_quality(model, [text_for_model])[0]
+        confidence = quality.confidence
+
+        skills = extract_skills(text_for_model)
+
+        insert_prediction_sql = text("""
+            INSERT INTO model_predictions (
+                job_post_id,
+                prediction_source,
+                model_name,
+                model_version,
+                model_run_id,
+                model_registry_id,
+                model_path,
+                predicted_category,
+                confidence,
+                confidence_level,
+                is_low_confidence,
+                top_predictions
+            )
+            VALUES (
+                :job_post_id,
+                :prediction_source,
+                :model_name,
+                :model_version,
+                :model_run_id,
+                :model_registry_id,
+                :model_path,
+                :predicted_category,
+                :confidence,
+                :confidence_level,
+                :is_low_confidence,
+                CAST(:top_predictions AS jsonb)
+            )
+            RETURNING id
+        """)
+
+        with engine.begin() as conn:
+            result = conn.execute(
+                insert_prediction_sql,
+                {
+                    "job_post_id": req.job_post_id,
+                    "prediction_source": PREDICTION_SOURCE_API,
+                    "model_name": metadata.model_name,
+                    "model_version": metadata.run_id or metadata.status,
+                    "model_run_id": metadata.run_id,
+                    "model_registry_id": metadata.model_registry_id,
+                    "model_path": str(metadata.model_path),
+                    "predicted_category": str(pred),
+                    "confidence": confidence,
+                    "confidence_level": quality.confidence_level,
+                    "is_low_confidence": quality.is_low_confidence,
+                    "top_predictions": json.dumps(
+                        quality.top_predictions,
+                        ensure_ascii=False,
+                    ),
+                },
+            )
+
+            prediction_id = result.scalar_one()
+
+        response_payload = {
+            "job_category": str(pred),
+            "confidence": confidence,
+            "confidence_level": quality.confidence_level,
+            "is_low_confidence": quality.is_low_confidence,
+            "top_predictions": quality.top_predictions,
+            "skills": skills,
+            "prediction_id": prediction_id,
+            "prediction_source": PREDICTION_SOURCE_API,
+            "model_name": metadata.model_name,
+            "model_run_id": metadata.run_id,
+            "model_registry_id": metadata.model_registry_id,
+            "model_path": str(metadata.model_path),
+        }
+
+        latency_ms = (time.perf_counter() - started_at) * 1000
+
+        api_log_id = insert_api_prediction_log(
+            req=req,
+            prediction_id=prediction_id,
+            response_payload=response_payload,
+            metadata=metadata,
+            status="SUCCESS",
+            error_message=None,
+            latency_ms=latency_ms,
+        )
+
+        response_payload["api_log_id"] = api_log_id
+
+        return response_payload
+
+    except Exception as exc:
+        latency_ms = (time.perf_counter() - started_at) * 1000
+
+        try:
+            insert_api_prediction_log(
+                req=req,
+                prediction_id=prediction_id,
+                response_payload=response_payload,
+                metadata=metadata,
+                status="FAILED",
+                error_message=f"{type(exc).__name__}: {exc}",
+                latency_ms=latency_ms,
+            )
+        except Exception as log_exc:
+            print(
+                "Failed to write api_prediction_logs: "
+                f"{type(log_exc).__name__}: {log_exc}"
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {type(exc).__name__}: {exc}",
+        )
