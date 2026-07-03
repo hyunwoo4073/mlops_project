@@ -69,3 +69,6 @@ logs/
 # airflow
 simple_auth_manager_passwords.json
 airflow_logs/
+
+reports/
+!reports/.gitkeep

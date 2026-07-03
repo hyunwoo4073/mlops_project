@@ -2,11 +2,23 @@
 
 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, Streamlit 기반 운영 대시보드, GitHub Actions 기반 테스트/코드 품질 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 주요 업데이트 내역
 
 ```text
+2026-07-03
+- GitHub Actions 기반 pytest 자동 실행 workflow 추가
+- Ruff 기반 코드 품질 검사 CI 추가
+- requirements-dev.txt / pyproject.toml 추가
+- reports/latest_pipeline_report.md와 docs/sample_pipeline_report.md 역할 분리
+- 포트폴리오용 sample pipeline report 문서화
+- Streamlit 기반 MLOps Dashboard 추가
+- Docker Compose dashboard 서비스 추가
+- Dashboard 화면 캡처 docs/images/dashboard.png 추가
+- README에 Dashboard 실행 방법 / 접속 정보 / 스크린샷 반영
+- 다음 개선 예정에서 완료 항목 정리
+
 2026-07-02
 - DATA_SOURCE_MODE 기반 데이터 소스 실행 모드 추가
 - sample_only / crawler_only / mixed 모드 분리
@@ -54,6 +66,7 @@
 → FastAPI 요청/응답 로그 저장
 → prediction lineage 저장
 → source별 / prediction quality / API quality 리포트 생성
+→ Streamlit Dashboard로 모델/데이터/API 품질 지표 시각화
 → FastAPI serving model 자동 reload
 → Airflow DAG로 전체 파이프라인 실행
 ```
@@ -107,8 +120,23 @@ flowchart LR
     AL --> R
     D --> R
 
+    B --> DASH[Streamlit Dashboard]
+    D --> DASH
+    J --> DASH
+    AL --> DASH
+    QR --> DASH
+    MR --> DASH
+
     subgraph Orchestration
         L[Airflow DAG / PythonOperator]
+    end
+
+    subgraph CI
+        CI1[GitHub Actions]
+        CI2[pytest]
+        CI3[Ruff]
+        CI1 --> CI2
+        CI1 --> CI3
     end
 
     L --> PREP
@@ -140,10 +168,17 @@ Docker Compose
 ├── MLflow
 │   ├── backend store  : PostgreSQL mlflow DB
 │   └── artifact store : ./mlartifacts
-└── FastAPI
-    ├── /predict
-    ├── /model
-    └── /reload-model
+├── FastAPI
+│   ├── /predict
+│   ├── /model
+│   └── /reload-model
+└── Streamlit Dashboard
+    ├── latest promoted model 조회
+    ├── source별 데이터 품질 조회
+    ├── batch prediction quality 조회
+    ├── pipeline check 결과 조회
+    ├── FastAPI prediction logs 조회
+    └── recent predictions 조회
 ```
 
 ## 기술 스택
@@ -156,8 +191,11 @@ ML Lifecycle    : MLflow
 Preprocessing   : pandas
 Model           : scikit-learn
 API             : FastAPI
+Dashboard       : Streamlit, Plotly
 Crawler         : requests, BeautifulSoup
 Test            : pytest
+Code Quality    : Ruff
+CI              : GitHub Actions
 Container       : Docker Compose
 ```
 
@@ -168,9 +206,14 @@ Container       : Docker Compose
 ├── README.md
 ├── docker-compose.yml
 ├── requirements.txt
+├── requirements-dev.txt
+├── pyproject.toml
 ├── pytest.ini
 ├── .env.example
 ├── .gitignore
+├── .github/
+│   └── workflows/
+│       └── pytest.yml
 ├── dags/
 │   └── jobskill_pipeline_dag.py
 ├── docker/
@@ -195,6 +238,9 @@ Container       : Docker Compose
 │   │   └── prediction_quality.py
 │   ├── crawling/
 │   │   └── crawl_remoteok_jobs.py
+│   ├── dashboard/
+│   │   ├── __init__.py
+│   │   └── app.py
 │   ├── ingestion/
 │   │   ├── prepare_raw_sources.py
 │   │   └── load_raw_jobs.py
@@ -228,8 +274,10 @@ Container       : Docker Compose
 ├── mlartifacts/
 ├── airflow_logs/
 ├── docs/
+│   ├── sample_pipeline_report.md
 │   └── images/
 │       ├── Airflow DAG success.png
+│       ├── dashboard.png
 │       ├── fastapi.png
 │       ├── mlflow.png
 │       └── postgresql.png
@@ -798,6 +846,44 @@ Recent API Prediction Logs
 
 이를 통해 현재 서빙 모델, 모델 승격 이력, 예측 lineage, 데이터/모델 검증 결과, source별 데이터 품질을 한 번에 확인할 수 있습니다.
 
+
+### 16-1. Streamlit Dashboard
+
+`src/dashboard/app.py`
+
+PostgreSQL에 저장된 MLOps 파이프라인 실행 결과를 조회하는 대시보드입니다.
+
+확인 가능한 항목:
+
+```text
+Latest promoted model
+Source data quality
+Batch prediction quality
+Pipeline check results
+FastAPI prediction logs
+Recent predictions
+```
+
+Docker Compose 서비스:
+
+```text
+dashboard
+```
+
+실행:
+
+```bash
+docker compose up -d dashboard
+```
+
+접속:
+
+```text
+http://localhost:8501
+```
+
+<img src="docs/images/dashboard.png" width="900">
+
 ### 17. Airflow DAG
 
 `dags/jobskill_pipeline_dag.py`
@@ -875,6 +961,41 @@ pytest
 
 ```bash
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytest"
+```
+
+
+### 18-1. GitHub Actions / Ruff
+
+`.github/workflows/pytest.yml`  
+`pyproject.toml`  
+`requirements-dev.txt`
+
+push 또는 pull request 발생 시 GitHub Actions에서 단위 테스트와 코드 품질 검사를 자동 실행합니다.
+
+실행 조건:
+
+```text
+push to main
+push to feature/**
+pull request to main
+```
+
+실행 항목:
+
+```text
+ruff check src dags scripts tests
+pytest
+```
+
+현재 Ruff는 초기 도입 단계이므로 전체 스타일 규칙이 아니라, 런타임 오류로 이어질 가능성이 높은 기본 규칙만 검사합니다.
+
+활성화한 Ruff 규칙:
+
+```text
+E9  : syntax error
+F63 : invalid comparison / usage
+F7  : control-flow related issue
+F82 : undefined name
 ```
 
 ## PostgreSQL 테이블
@@ -1202,7 +1323,8 @@ docker compose up -d --no-build --force-recreate \
   airflow-dag-processor \
   airflow-triggerer \
   mlflow \
-  api
+  api \
+  dashboard
 ```
 
 ### 9. 컨테이너 상태 확인
@@ -1237,6 +1359,47 @@ http://localhost:5000
 
 ```text
 http://localhost:8000/docs
+```
+
+### Streamlit Dashboard
+
+```text
+http://localhost:8501
+```
+
+
+## Streamlit Dashboard 실행
+
+### Docker Compose 실행
+
+```bash
+docker compose up -d dashboard
+```
+
+접속:
+
+```text
+http://localhost:8501
+```
+
+로그 확인:
+
+```bash
+docker compose logs --tail=100 dashboard
+```
+
+### 로컬 실행
+
+로컬에서 직접 실행하려면 Streamlit과 Plotly가 필요합니다.
+
+```bash
+pip install streamlit plotly
+```
+
+로컬 실행 시 PostgreSQL 컨테이너에 호스트 기준으로 접속해야 하므로 `DB_HOST=localhost`를 사용합니다.
+
+```bash
+DB_HOST=localhost streamlit run src/dashboard/app.py
 ```
 
 ## Airflow DAG 실행
@@ -1716,6 +1879,18 @@ API low confidence 비율
 최근 API prediction logs
 ```
 
+
+### Sample Pipeline Report
+
+포트폴리오용 샘플 리포트는 아래 문서에서 확인할 수 있습니다.
+
+```text
+docs/sample_pipeline_report.md
+```
+
+`reports/latest_pipeline_report.md`는 DAG 실행 시점마다 갱신되는 runtime output입니다.  
+GitHub에서 고정된 예시 산출물을 보여주기 위해 `docs/sample_pipeline_report.md`를 별도로 관리합니다.
+
 ## 테스트 실행
 
 로컬 실행:
@@ -1739,6 +1914,29 @@ low confidence 판단
 top-k prediction 생성
 ```
 
+### GitHub Actions
+
+push 또는 pull request 발생 시 GitHub Actions에서 pytest와 Ruff를 자동 실행합니다.
+
+```text
+.github/workflows/pytest.yml
+```
+
+실행 항목:
+
+```bash
+ruff check src dags scripts tests
+pytest
+```
+
+로컬에서도 동일하게 확인할 수 있습니다.
+
+```bash
+pip install -r requirements-dev.txt
+ruff check src dags scripts tests
+pytest
+```
+
 ## Git 제외 대상
 
 아래 파일과 디렉터리는 Git에 올리지 않습니다.
@@ -1756,6 +1954,8 @@ mlartifacts/
 mlflow.db
 mlruns/
 airflow_logs/
+reports/*
+!reports/.gitkeep
 simple_auth_manager_passwords.json
 ```
 
@@ -2246,6 +2446,113 @@ MAX_LOW_CONFIDENCE_RATIO=0.8
 
 단, 포트폴리오 관점에서는 기준을 낮추는 것보다 source별 / category별 confidence 리포트로 품질 이슈를 드러내는 것이 더 자연스럽습니다.
 
+
+
+### 17. docker-compose.yml dashboard 들여쓰기 오류
+
+증상:
+
+```text
+mapping key "image" already defined
+mapping key "container_name" already defined
+```
+
+원인:
+
+```text
+dashboard 서비스가 services 하위가 아니라 api 서비스 내부에 잘못 들여쓰기됨
+```
+
+잘못된 예:
+
+```yaml
+  api:
+    ...
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    dashboard:
+    image: jobskill-airflow:3.2.2
+```
+
+정상:
+
+```yaml
+  api:
+    ...
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    image: jobskill-airflow:3.2.2
+```
+
+확인:
+
+```bash
+docker compose config
+```
+
+### 18. Streamlit command not found
+
+증상:
+
+```text
+streamlit: command not found
+```
+
+원인:
+
+```text
+dashboard 서비스가 사용하는 jobskill-airflow 이미지에 streamlit / plotly가 설치되지 않음
+```
+
+해결:
+
+```text
+requirements.txt에 streamlit, plotly 추가
+Airflow 이미지 재빌드
+dashboard 서비스 재실행
+```
+
+```bash
+docker compose build airflow-image
+docker compose up -d dashboard
+```
+
+### 19. GitHub Actions에서 pytest import 실패
+
+증상:
+
+```text
+ModuleNotFoundError
+```
+
+원인:
+
+```text
+workflow에서 테스트에 필요한 의존성을 충분히 설치하지 않음
+```
+
+해결:
+
+```text
+requirements-dev.txt에 pytest / ruff 추가
+테스트가 pandas, sklearn 등 프로젝트 의존성을 직접 import하면 requirements.txt도 함께 설치
+```
+
+예시:
+
+```yaml
+- name: Install dependencies
+  run: |
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    pip install -r requirements-dev.txt
+```
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -2280,6 +2587,10 @@ API prediction과 batch prediction 저장 경로 분리
 FK 제약조건을 고려한 batch inference 재실행 방식 개선
 prediction quality gate를 통한 batch inference 결과 검증
 source/category별 prediction confidence 분석 리포트 구성
+GitHub Actions 기반 pytest 자동 실행 구성
+Ruff 기반 코드 품질 검사 CI 구성
+Streamlit / Plotly 기반 MLOps Dashboard 구성
+포트폴리오용 dashboard 스크린샷 및 sample pipeline report 문서화
 ```
 
 ## 현재 완료된 범위
@@ -2333,16 +2644,25 @@ check_prediction_quality.py 추가
 prediction quality gate DAG 추가
 API quality / prediction quality 리포트 항목 추가
 FK / SQL / INSERT 컬럼 불일치 트러블슈팅 정리
+GitHub Actions 기반 pytest 자동 실행 workflow 추가
+Ruff 기반 코드 품질 검사 추가
+requirements-dev.txt / pyproject.toml 추가
+포트폴리오용 sample pipeline report 추가
+runtime report와 documentation sample 분리
+Streamlit Dashboard 추가
+Docker Compose dashboard 서비스 추가
+Dashboard 스크린샷 docs/images/dashboard.png 추가
+README에 Dashboard 실행 방법 / 접속 정보 / 스크린샷 반영
 ```
 
 ## 다음 개선 예정
 
 ```text
-GitHub Actions 기반 pytest 자동 실행
-간단한 Streamlit 또는 Grafana 대시보드 추가
 prediction quality 기반 Slack/Email 알림 추가
 크롤링 source 추가 또는 수집 데이터 다양화
 실제 운영 환경 기준 README 아키텍처 다이어그램 보강
 모델 성능 개선을 위한 데이터 라벨링/피처 개선
-API 요청 로그 기반 모니터링 지표 시각화
+GitHub Actions integration test 추가(PostgreSQL 포함)
+Streamlit Dashboard 필터 / 기간 조건 / 상세 drill-down 추가
+API 요청 로그 기반 모니터링 지표 고도화
 ```
