@@ -2,6 +2,10 @@ name: Smoke Check
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feature/**"
 
 jobs:
   smoke-check:
