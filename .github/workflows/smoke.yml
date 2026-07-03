@@ -1,0 +1,134 @@
+name: Smoke Check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke-check:
+    name: Docker Compose smoke check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create CI env file
+        run: |
+          cat > .env <<'EOF'
+          DB_HOST=postgres
+          DB_PORT=5432
+          DB_NAME=jobskill
+          DB_USER=jobskill
+          DB_PASSWORD=jobskill
+
+          AIRFLOW_DB_NAME=airflow
+          MLFLOW_DB_NAME=mlflow
+
+          MLFLOW_TRACKING_URI=postgresql+psycopg2://jobskill:jobskill@postgres:5432/mlflow
+          MLFLOW_ARTIFACT_ROOT=/opt/airflow/project/mlartifacts
+          MLFLOW_EXPERIMENT_NAME=jobskill-classifier
+
+          MODEL_NAME=job_classifier
+          MODEL_PATH=models/job_classifier.pkl
+          BEST_MODEL_PATH=models/best/job_classifier.pkl
+
+          AIRFLOW_JWT_SECRET=ci_jwt_secret_change_me
+          AIRFLOW_API_SECRET_KEY=ci_api_secret_change_me
+          AIRFLOW_FERNET_KEY=2_JLFlBdmmtyD6bOdh5SKohcGo6yIkXGYGb-5ASXr2Q=
+
+          MIN_TRAINING_ROWS=10
+          MIN_CATEGORY_COUNT=2
+          MAX_UNKNOWN_RATIO=0.8
+          MIN_SAMPLES_PER_CLASS=2
+          TEST_SIZE=0.3
+
+          MIN_MODEL_ACCURACY=0.0
+          MIN_MODEL_F1_WEIGHTED=0.0
+
+          LOW_CONFIDENCE_THRESHOLD=0.6
+          PREDICTION_TOP_K=3
+          MIN_AVG_PREDICTION_CONFIDENCE=0.0
+          MAX_LOW_CONFIDENCE_RATIO=1.0
+          MIN_PREDICTION_ROWS=0
+
+          REMOTEOK_API_URL=https://remoteok.com/api
+          REMOTEOK_CRAWL_LIMIT=5
+          REMOTEOK_SCAN_LIMIT=50
+          REMOTEOK_FILTER_ENABLED=true
+          REMOTEOK_MIN_RELEVANCE_SCORE=2
+          REMOTEOK_MAX_RETRIES=1
+          REMOTEOK_RETRY_SLEEP_SECONDS=1
+          REMOTEOK_REQUEST_TIMEOUT_SECONDS=15
+          REMOTEOK_FALLBACK_TO_EXISTING_RAW=true
+          REMOTEOK_MIN_FETCHED_JOBS=0
+
+          DATA_SOURCE_MODE=sample_only
+          EOF
+
+      - name: Prepare runtime directories
+        run: |
+          mkdir -p data/raw data/processed models/best mlartifacts airflow_logs reports docs/images
+          touch simple_auth_manager_passwords.json
+          chmod -R 777 data models mlartifacts airflow_logs reports
+
+      - name: Build images
+        run: |
+          docker compose build airflow-image api
+
+      - name: Start PostgreSQL
+        run: |
+          docker compose up -d postgres
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in {1..30}; do
+            if docker exec jobskill-postgres pg_isready -U jobskill -d jobskill; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs postgres
+          exit 1
+
+      - name: Create Airflow and MLflow databases if needed
+        run: |
+          docker exec jobskill-postgres psql -U jobskill -d jobskill -tc "SELECT 1 FROM pg_database WHERE datname = 'airflow'" | grep -q 1 || \
+            docker exec jobskill-postgres psql -U jobskill -d jobskill -c "CREATE DATABASE airflow;"
+
+          docker exec jobskill-postgres psql -U jobskill -d jobskill -tc "SELECT 1 FROM pg_database WHERE datname = 'mlflow'" | grep -q 1 || \
+            docker exec jobskill-postgres psql -U jobskill -d jobskill -c "CREATE DATABASE mlflow;"
+
+      - name: Create project tables
+        run: |
+          docker exec -i jobskill-postgres psql -U jobskill -d jobskill < sql/create_tables.sql
+
+      - name: Initialize Airflow metadata DB
+        run: |
+          docker compose up --no-build airflow-init
+
+      - name: Start services
+        run: |
+          docker compose up -d --no-build \
+            airflow-apiserver \
+            airflow-scheduler \
+            airflow-dag-processor \
+            airflow-triggerer \
+            mlflow \
+            api \
+            dashboard
+
+      - name: Wait for services
+        run: |
+          sleep 30
+          docker compose ps
+
+      - name: Run smoke check
+        run: |
+          ./scripts/smoke_check.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=200
