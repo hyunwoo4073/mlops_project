@@ -1,0 +1,136 @@
+.PHONY: help build up down restart ps logs \
+        db-init airflow-init create-tables \
+        dag-list dag-errors dag-tasks dag-trigger dag-runs \
+        test test-container lint ci \
+        report dashboard dashboard-logs \
+        api api-logs mlflow-logs \
+        psql clean-runtime
+
+help:
+	@echo ""
+	@echo "JobSkill MLOps Commands"
+	@echo ""
+	@echo "Build / Run"
+	@echo "  make build             Build Airflow and API images"
+	@echo "  make up                Start main services"
+	@echo "  make down              Stop services"
+	@echo "  make restart           Restart main services"
+	@echo "  make ps                Show container status"
+	@echo "  make logs              Show all logs"
+	@echo ""
+	@echo "Database / Airflow"
+	@echo "  make airflow-init      Initialize Airflow metadata DB"
+	@echo "  make create-tables     Create or update project tables"
+	@echo "  make psql              Open PostgreSQL shell"
+	@echo ""
+	@echo "DAG"
+	@echo "  make dag-list          List DAGs"
+	@echo "  make dag-errors        Show DAG import errors"
+	@echo "  make dag-tasks         List pipeline tasks"
+	@echo "  make dag-trigger       Trigger pipeline DAG"
+	@echo "  make dag-runs          List pipeline DAG runs"
+	@echo ""
+	@echo "Quality"
+	@echo "  make lint              Run ruff"
+	@echo "  make test              Run local pytest"
+	@echo "  make test-container    Run pytest in Airflow container"
+	@echo "  make ci                Run lint and pytest"
+	@echo ""
+	@echo "Reports / Apps"
+	@echo "  make report            Generate pipeline report"
+	@echo "  make dashboard         Start Streamlit dashboard"
+	@echo "  make dashboard-logs    Show dashboard logs"
+	@echo "  make api               Start FastAPI"
+	@echo "  make api-logs          Show FastAPI logs"
+	@echo ""
+
+build:
+	docker compose build airflow-image api
+
+up:
+	docker compose up -d --no-build --force-recreate \
+		airflow-apiserver \
+		airflow-scheduler \
+		airflow-dag-processor \
+		airflow-triggerer \
+		mlflow \
+		api \
+		dashboard
+
+down:
+	docker compose down
+
+restart:
+	docker compose up -d --no-build --force-recreate \
+		airflow-apiserver \
+		airflow-scheduler \
+		airflow-dag-processor \
+		airflow-triggerer \
+		mlflow \
+		api \
+		dashboard
+
+ps:
+	docker compose ps
+
+logs:
+	docker compose logs --tail=100
+
+airflow-init:
+	docker compose up --no-build airflow-init
+
+create-tables:
+	docker exec -i jobskill-postgres psql -U jobskill -d jobskill < sql/create_tables.sql
+
+psql:
+	docker exec -it jobskill-postgres psql -U jobskill -d jobskill
+
+dag-list:
+	docker compose exec airflow-scheduler airflow dags list
+
+dag-errors:
+	docker compose exec airflow-scheduler airflow dags list-import-errors
+
+dag-tasks:
+	docker compose exec airflow-scheduler airflow tasks list jobskill_mlops_pipeline
+
+dag-trigger:
+	docker compose exec airflow-scheduler airflow dags trigger jobskill_mlops_pipeline
+
+dag-runs:
+	docker compose exec airflow-scheduler airflow dags list-runs jobskill_mlops_pipeline
+
+lint:
+	ruff check src dags scripts tests
+
+test:
+	pytest
+
+test-container:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytest"
+
+ci: lint test
+
+report:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
+
+dashboard:
+	docker compose up -d dashboard
+
+dashboard-logs:
+	docker compose logs --tail=100 dashboard
+
+api:
+	docker compose up -d api
+
+api-logs:
+	docker compose logs --tail=100 api
+
+mlflow-logs:
+	docker compose logs --tail=100 mlflow
+
+clean-runtime:
+	rm -rf airflow_logs/*
+	rm -rf reports/*
+	rm -rf data/raw/*
+	rm -rf data/processed/*
