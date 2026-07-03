@@ -2,6 +2,10 @@ name: Smoke Check
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feature/**"
 
 jobs:
   smoke-check:
@@ -107,21 +111,62 @@ jobs:
         run: |
           docker compose up --no-build airflow-init
 
-      - name: Start services
+      - name: Start Airflow and MLflow services
         run: |
           docker compose up -d --no-build \
             airflow-apiserver \
             airflow-scheduler \
             airflow-dag-processor \
             airflow-triggerer \
-            mlflow \
-            api \
-            dashboard
+            mlflow
 
-      - name: Wait for services
+      - name: Wait for Airflow and MLflow
         run: |
           sleep 30
           docker compose ps
+
+      - name: Run minimal pipeline for smoke test
+        run: |
+          docker compose exec -T airflow-scheduler bash -lc "
+            cd /opt/airflow/project && \
+            python src/ingestion/prepare_raw_sources.py && \
+            python scripts/generate_sample_jobs.py && \
+            python src/ingestion/load_raw_jobs.py && \
+            python src/preprocessing/preprocess_db.py && \
+            python src/quality/check_training_data.py && \
+            python src/training/train_baseline.py && \
+            python src/quality/check_model_performance.py && \
+            python src/training/promote_model.py && \
+            python src/inference/batch_inference.py && \
+            python src/quality/check_prediction_quality.py && \
+            python src/reporting/generate_pipeline_report.py
+          "
+
+      - name: Verify promoted model exists
+        run: |
+          test -f models/best/job_classifier.pkl
+          docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+            SELECT
+              id,
+              model_name,
+              status,
+              promoted_model_path,
+              created_at
+            FROM model_registry
+            ORDER BY id DESC
+            LIMIT 5;
+          "
+
+      - name: Start API and Dashboard
+        run: |
+          docker compose up -d --no-build api dashboard
+
+      - name: Wait for API and Dashboard
+        run: |
+          sleep 20
+          docker compose ps
+          docker compose logs --tail=100 api
+          docker compose logs --tail=100 dashboard
 
       - name: Run smoke check
         run: |
