@@ -1,13 +1,22 @@
 # jobskill-mlops project
 
+[![Python CI](https://github.com/hyunwoo4073/mlops_project/actions/workflows/pytest.yml/badge.svg)](https://github.com/hyunwoo4073/mlops_project/actions/workflows/pytest.yml)
+[![Smoke Check](https://github.com/hyunwoo4073/mlops_project/actions/workflows/smoke.yml/badge.svg)](https://github.com/hyunwoo4073/mlops_project/actions/workflows/smoke.yml)
+
 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, Streamlit 기반 운영 대시보드, GitHub Actions 기반 테스트/코드 품질 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, Streamlit 기반 운영 대시보드, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 주요 업데이트 내역
 
 ```text
 2026-07-03
+- Makefile 기반 실행 명령어 표준화 추가
+- scripts/smoke_check.sh 기반 로컬 smoke check 추가
+- GitHub Actions 기반 Docker Compose smoke check workflow 추가
+- Smoke workflow에서 API 기동 전 sample 기반 최소 파이프라인 실행 및 promoted model 생성 검증 추가
+- README 상단 GitHub Actions badge 추가
+- CHANGELOG.md 기반 MVP release 기록 추가
 - GitHub Actions 기반 pytest 자동 실행 workflow 추가
 - Ruff 기반 코드 품질 검사 CI 추가
 - requirements-dev.txt / pyproject.toml 추가
@@ -17,6 +26,14 @@
 - Docker Compose dashboard 서비스 추가
 - Dashboard 화면 캡처 docs/images/dashboard.png 추가
 - README에 Dashboard 실행 방법 / 접속 정보 / 스크린샷 반영
+Makefile 추가 및 주요 명령어 표준화
+scripts/smoke_check.sh 추가
+로컬 Docker Compose smoke check 검증
+GitHub Actions smoke.yml 추가
+CI smoke workflow에서 sample 기반 최소 파이프라인 실행 후 API / Dashboard smoke check 수행
+README badge 추가
+CHANGELOG.md 기반 MVP release 정리
+.gitattributes 기반 line ending 관리 추가
 - 다음 개선 예정에서 완료 항목 정리
 
 2026-07-02
@@ -135,8 +152,10 @@ flowchart LR
         CI1[GitHub Actions]
         CI2[pytest]
         CI3[Ruff]
+        CI4[Docker Compose Smoke Check]
         CI1 --> CI2
         CI1 --> CI3
+        CI1 --> CI4
     end
 
     L --> PREP
@@ -172,13 +191,18 @@ Docker Compose
 │   ├── /predict
 │   ├── /model
 │   └── /reload-model
-└── Streamlit Dashboard
-    ├── latest promoted model 조회
-    ├── source별 데이터 품질 조회
-    ├── batch prediction quality 조회
-    ├── pipeline check 결과 조회
-    ├── FastAPI prediction logs 조회
-    └── recent predictions 조회
+├── Streamlit Dashboard
+│   ├── latest promoted model 조회
+│   ├── source별 데이터 품질 조회
+│   ├── batch prediction quality 조회
+│   ├── pipeline check 결과 조회
+│   ├── FastAPI prediction logs 조회
+│   └── recent predictions 조회
+└── Local / CI Validation
+    ├── Makefile 명령어 표준화
+    ├── scripts/smoke_check.sh
+    ├── GitHub Actions Python CI
+    └── GitHub Actions Smoke Check
 ```
 
 ## 기술 스택
@@ -196,6 +220,7 @@ Crawler         : requests, BeautifulSoup
 Test            : pytest
 Code Quality    : Ruff
 CI              : GitHub Actions
+Command Runner  : Makefile, Shell Script
 Container       : Docker Compose
 ```
 
@@ -204,16 +229,20 @@ Container       : Docker Compose
 ```text
 .
 ├── README.md
+├── CHANGELOG.md
+├── Makefile
 ├── docker-compose.yml
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── pyproject.toml
 ├── pytest.ini
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .github/
 │   └── workflows/
-│       └── pytest.yml
+│       ├── pytest.yml
+│       └── smoke.yml
 ├── dags/
 │   └── jobskill_pipeline_dag.py
 ├── docker/
@@ -229,7 +258,8 @@ Container       : Docker Compose
 │   ├── create_tables.sql
 │   └── report_queries.sql
 ├── scripts/
-│   └── generate_sample_jobs.py
+│   ├── generate_sample_jobs.py
+│   └── smoke_check.sh
 ├── src/
 │   ├── common/
 │   │   ├── db.py
@@ -1333,6 +1363,53 @@ docker compose up -d --no-build --force-recreate \
 docker compose ps
 ```
 
+## Makefile 명령어
+
+자주 사용하는 Docker Compose, Airflow, 테스트, 리포트, smoke check 명령어는 `Makefile`로 표준화했습니다.
+
+명령어 목록 확인:
+
+```bash
+make help
+```
+
+주요 명령어:
+
+```bash
+make build
+make up
+make ps
+make dag-errors
+make dag-tasks
+make dag-trigger
+make report
+make dashboard
+make smoke
+make ci
+```
+
+대표 실행 흐름:
+
+```bash
+make build
+make up
+make dag-trigger
+make smoke
+make dashboard
+```
+
+`make ci`는 로컬에서 Ruff와 pytest를 함께 실행합니다.
+
+```bash
+make ci
+```
+
+`make smoke`는 로컬 Docker Compose 서비스의 기본 기동성과 주요 엔드포인트를 확인합니다.
+
+```bash
+make smoke
+```
+
 ## 접속 정보
 
 ### Airflow UI
@@ -1503,6 +1580,51 @@ SELECT COUNT(*) FROM pipeline_check_results;
 SELECT COUNT(*) FROM model_registry;
 SELECT COUNT(*) FROM model_predictions;
 SELECT COUNT(*) FROM api_prediction_logs;
+```
+
+## Smoke Check
+
+서비스 실행 후 주요 컴포넌트가 정상 동작하는지 확인하기 위해 smoke check 스크립트를 제공합니다.
+
+실행:
+
+```bash
+make smoke
+```
+
+또는 직접 실행:
+
+```bash
+./scripts/smoke_check.sh
+```
+
+검증 항목:
+
+```text
+Docker Compose config
+Container status
+PostgreSQL connection
+Project table existence
+Core table counts
+Airflow DAG import errors
+Airflow pipeline task list
+MLflow UI
+FastAPI health
+FastAPI model info
+Streamlit dashboard
+```
+
+GitHub Actions smoke workflow에서도 동일한 스크립트를 사용합니다.  
+단, GitHub Actions runner는 빈 환경이므로 API를 기동하기 전에 sample data 기반 최소 파이프라인을 먼저 실행해 promoted model을 생성한 뒤 smoke check를 수행합니다.
+
+```text
+PostgreSQL 실행
+→ 프로젝트 테이블 생성
+→ Airflow / MLflow 실행
+→ sample_only 기반 최소 파이프라인 실행
+→ promoted model 생성 확인
+→ API / Dashboard 실행
+→ smoke_check.sh 실행
 ```
 
 ## 로컬 Python 스크립트 실행 순서
@@ -1916,10 +2038,23 @@ top-k prediction 생성
 
 ### GitHub Actions
 
-push 또는 pull request 발생 시 GitHub Actions에서 pytest와 Ruff를 자동 실행합니다.
+GitHub Actions는 두 가지 workflow로 구성합니다.
 
 ```text
 .github/workflows/pytest.yml
+.github/workflows/smoke.yml
+```
+
+#### Python CI
+
+push 또는 pull request 발생 시 pytest와 Ruff를 자동 실행합니다.
+
+실행 조건:
+
+```text
+push to main
+push to feature/**
+pull request to main
 ```
 
 실행 항목:
@@ -1935,6 +2070,69 @@ pytest
 pip install -r requirements-dev.txt
 ruff check src dags scripts tests
 pytest
+```
+
+#### Smoke Check
+
+Docker Compose 기반 전체 서비스 기동성을 확인하는 smoke check workflow입니다.
+
+실행 조건:
+
+```text
+workflow_dispatch
+push to main
+push to feature/**
+```
+
+검증 흐름:
+
+```text
+Docker Compose image build
+PostgreSQL start
+Airflow / MLflow metadata DB prepare
+Project table create
+Airflow metadata DB init
+Airflow / MLflow start
+sample_only minimal pipeline run
+promoted model existence check
+FastAPI / Dashboard start
+scripts/smoke_check.sh run
+```
+
+GitHub Actions의 빈 runner에서는 promoted model이 존재하지 않으므로, API를 시작하기 전에 최소 파이프라인을 먼저 실행해 `models/best/job_classifier.pkl`과 `model_registry`의 promoted model을 생성합니다.
+
+## Release / Changelog
+
+프로젝트의 주요 완성 단위는 `CHANGELOG.md`에 기록합니다.
+
+현재 기준 MVP 릴리스:
+
+```text
+v0.1.0 - MVP Release
+```
+
+릴리스 기준:
+
+```text
+Airflow end-to-end DAG 구성
+PostgreSQL 기반 데이터/예측/검증/모델 메타데이터 저장
+MLflow tracking / artifact 연동
+모델 성능 gate와 promotion
+Batch inference / API inference 저장 분리
+Prediction quality gate
+Pipeline report
+Streamlit Dashboard
+Makefile
+Local smoke check
+GitHub Actions Python CI
+GitHub Actions Docker Compose smoke check
+```
+
+태그 생성 예시:
+
+```bash
+git tag -a v0.1.0 -m "v0.1.0 MVP release"
+git push origin v0.1.0
 ```
 
 ## Git 제외 대상
@@ -1966,6 +2164,27 @@ docs/images/
 ```
 
 `reports/latest_pipeline_report.md`는 실행 결과 예시로 보여주고 싶으면 커밋해도 되고, 매 실행마다 바뀌는 산출물로 관리하려면 `.gitignore`에 추가합니다.
+
+## Line Ending 관리
+
+WSL / Windows 환경에서 shell script, Makefile, workflow 파일의 줄바꿈이 CRLF로 바뀌면 실행 문제가 생길 수 있습니다.
+
+이를 방지하기 위해 `.gitattributes`에서 주요 파일의 line ending을 LF로 고정합니다.
+
+```gitattributes
+*.sh text eol=lf
+Makefile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+```
+
+변경 후 기존 파일을 재정규화할 수 있습니다.
+
+```bash
+git add --renormalize .
+```
 
 ## 트러블슈팅
 
@@ -2553,6 +2772,97 @@ requirements-dev.txt에 pytest / ruff 추가
     pip install -r requirements-dev.txt
 ```
 
+
+### 20. GitHub Actions에 Smoke Check workflow가 보이지 않는 경우
+
+증상:
+
+```text
+Actions 화면에 pytest.yml만 보이고 smoke.yml이 보이지 않음
+```
+
+확인:
+
+```bash
+git fetch origin
+git ls-tree -r origin/main --name-only | grep ".github/workflows"
+git show origin/main:.github/workflows/smoke.yml
+```
+
+정상 조건:
+
+```text
+.github/workflows/pytest.yml
+.github/workflows/smoke.yml
+```
+
+`workflow_dispatch`만 있는 workflow는 기본 브랜치에 workflow 파일이 반영되어야 Actions 화면에 보입니다.  
+초기 등록 확인을 쉽게 하기 위해 아래처럼 `push` trigger를 임시로 추가할 수 있습니다.
+
+```yaml
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "feature/**"
+```
+
+### 21. GitHub Actions smoke check에서 FastAPI health 실패
+
+증상:
+
+```text
+[CHECK] FastAPI health
+curl: (7) Failed to connect to localhost port 8000
+[FAIL] FastAPI health
+```
+
+원인:
+
+```text
+GitHub Actions runner는 빈 환경이므로 API 기동 시점에 promoted model이 아직 존재하지 않음
+FastAPI가 시작 시점에 모델을 로드하지 못해 컨테이너가 종료됨
+```
+
+해결:
+
+```text
+smoke workflow에서 API를 시작하기 전에 sample_only 기반 최소 파이프라인을 먼저 실행
+models/best/job_classifier.pkl 생성 확인
+model_registry의 PROMOTED row 생성 확인
+이후 API와 Dashboard 실행
+```
+
+확인 명령:
+
+```bash
+test -f models/best/job_classifier.pkl
+
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT id, model_name, status, promoted_model_path, created_at
+FROM model_registry
+ORDER BY id DESC
+LIMIT 5;
+"
+```
+
+### 22. feature 브랜치 push 시 upstream branch 없음
+
+증상:
+
+```text
+fatal: The current branch feature/xxx has no upstream branch.
+```
+
+해결:
+
+```bash
+git push --set-upstream origin feature/xxx
+```
+
+이후부터는 같은 브랜치에서 `git push`만 실행하면 됩니다.
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -2591,6 +2901,11 @@ GitHub Actions 기반 pytest 자동 실행 구성
 Ruff 기반 코드 품질 검사 CI 구성
 Streamlit / Plotly 기반 MLOps Dashboard 구성
 포트폴리오용 dashboard 스크린샷 및 sample pipeline report 문서화
+Makefile 기반 프로젝트 실행 명령어 표준화
+로컬 smoke check script를 통한 서비스 기동성 검증
+GitHub Actions에서 Docker Compose 기반 smoke check workflow 구성
+CI 빈 환경에서 promoted model 생성 전 API 기동 시 실패하는 문제 해결
+CHANGELOG와 Git tag 기반 MVP 릴리스 관리
 ```
 
 ## 현재 완료된 범위
@@ -2662,7 +2977,8 @@ prediction quality 기반 Slack/Email 알림 추가
 크롤링 source 추가 또는 수집 데이터 다양화
 실제 운영 환경 기준 README 아키텍처 다이어그램 보강
 모델 성능 개선을 위한 데이터 라벨링/피처 개선
-GitHub Actions integration test 추가(PostgreSQL 포함)
+GitHub Actions smoke workflow 실행 시간 최적화
+GitHub Actions smoke workflow를 workflow_dispatch 전용으로 전환할지 검토
 Streamlit Dashboard 필터 / 기간 조건 / 상세 drill-down 추가
 API 요청 로그 기반 모니터링 지표 고도화
 ```
