@@ -1,7 +1,7 @@
 .PHONY: help build up down restart ps logs \
         db-init airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        test test-container lint ci smoke notify api-sample \
+        test test-container lint ci smoke notify api-sample cleanup drift-check \
         report dashboard dashboard-logs \
         api api-logs mlflow-logs \
         psql clean-runtime
@@ -36,6 +36,7 @@ help:
 	@echo "  make test-container    Run pytest in Airflow container"
 	@echo "  make ci                Run lint and pytest"
 	@echo "  make smoke             Run service smoke checks"
+	@echo "  make drift-check       Run prediction distribution drift check"
 	@echo ""
 	@echo "Reports / Apps"
 	@echo "  make report            Generate pipeline report"
@@ -47,6 +48,9 @@ help:
 	@echo ""
 	@echo "Notification"
 	@echo "  make notify            Send or print pipeline status notification"
+	@echo ""
+	@echo "Maintenance"
+	@echo "  make cleanup           Run cleanup retention script"
 	@echo ""
 
 build:
@@ -148,3 +152,9 @@ clean-runtime:
 
 api-sample:
 	python scripts/send_sample_api_requests.py
+
+cleanup:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/maintenance/cleanup_old_records.py"
+
+drift-check:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_prediction_drift.py"
