@@ -101,6 +101,11 @@ def run_check_prediction_quality():
 
     main()
 
+
+def run_notify_pipeline_status():
+    from src.notification.notify_pipeline_status import main
+    main()
+
 with DAG(
     dag_id="jobskill_mlops_pipeline",
     description="JobSkill MLOps pipeline with validation, model promotion, lineage, reporting, and data source modes",
@@ -165,6 +170,13 @@ with DAG(
     generate_pipeline_report = PythonOperator(
         task_id="generate_pipeline_report",
         python_callable=run_generate_pipeline_report,
+        trigger_rule="all_done",
+    )
+
+    notify_pipeline_status = PythonOperator(
+        task_id="notify_pipeline_status",
+        python_callable=run_notify_pipeline_status,
+        trigger_rule="all_done",
     )
 
     check_prediction_quality = PythonOperator(
@@ -185,4 +197,5 @@ with DAG(
         >> batch_inference
         >> check_prediction_quality
         >> generate_pipeline_report
+        >> notify_pipeline_status
     )

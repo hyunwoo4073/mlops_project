@@ -1,6 +1,6 @@
 # JobSkill MLOps Pipeline Report
 
-- Generated at: `2026-07-03 04:26:23`
+- Generated at: `2026-07-07 04:54:39`
 
 This report summarizes model registry, prediction lineage, and pipeline check results.
 
@@ -14,6 +14,7 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 
 | id | model_name | run_id_short | accuracy | f1_weighted | status | message | created_at |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 13 | job_classifier | b13f51c25aab | 0.8952 | 0.8935 | REJECTED | Current model was not promoted. current f1_weighted=0.8935, best f1_weighted=1.0000, current accuracy=0.8952, best accuracy=1.0000. | 2026-07-07 04:54:35.679136 |
 | 12 | job_classifier | 99dc0f69fb56 | 0.9333 | 0.9338 | REJECTED | Current model was not promoted. current f1_weighted=0.9338, best f1_weighted=1.0000, current accuracy=0.9333, best accuracy=1.0000. | 2026-07-02 08:10:34.204635 |
 | 11 | job_classifier | 9ee1953de09a | 0.9333 | 0.9338 | REJECTED | Current model was not promoted. current f1_weighted=0.9338, best f1_weighted=1.0000, current accuracy=0.9333, best accuracy=1.0000. | 2026-07-02 08:08:31.070159 |
 | 10 | job_classifier | 376280f012fb | 0.9333 | 0.9338 | REJECTED | Current model was not promoted. current f1_weighted=0.9338, best f1_weighted=1.0000, current accuracy=0.9333, best accuracy=1.0000. | 2026-07-02 07:53:34.058187 |
@@ -31,58 +32,71 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 
 | model_name | model_run_id_short | model_registry_id | registry_status | registry_accuracy | registry_f1_weighted | prediction_count | avg_confidence | first_predicted_at | last_predicted_at |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 1.0 | 300 | 0.6699 | 2026-07-02 08:10:36.051814 | 2026-07-02 08:10:36.051814 |
+| job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 1.0 | 355 | 0.6081 | 2026-07-07 04:54:08.458967 | 2026-07-07 04:54:37.485847 |
 
 ## Latest Predictions
 
 | id | job_post_id | predicted_category | confidence | model_name | model_run_id_short | model_registry_id | registry_status | registry_f1_weighted | predicted_at |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 300 | 300 | Data Analyst | 0.2417 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 299 | 299 | Data Analyst | 0.2181 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 298 | 298 | Data Analyst | 0.2406 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 297 | 297 | Data Analyst | 0.2206 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 296 | 296 | Data Analyst | 0.2636 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 295 | 295 | Data Analyst | 0.3641 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 294 | 294 | Data Analyst | 0.3322 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 293 | 293 | ML Engineer | 0.2387 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 292 | 292 | Data Analyst | 0.2542 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 291 | 291 | Data Analyst | 0.2206 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 290 | 290 | Data Analyst | 0.2253 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 289 | 289 | Data Analyst | 0.2508 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 288 | 288 | Data Analyst | 0.2455 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 287 | 287 | Data Analyst | 0.2783 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 286 | 286 | Backend Engineer | 0.2596 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 285 | 285 | Data Analyst | 0.3322 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 284 | 284 | Data Analyst | 0.2307 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 283 | 283 | ML Engineer | 0.2206 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 282 | 282 | ML Engineer | 0.2342 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
-| 281 | 281 | Backend Engineer | 0.2177 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-02 08:10:36.051814 |
+| 355 | 350 | Data Analyst | 0.3216 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 354 | 349 | Data Analyst | 0.2688 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 353 | 348 | Data Analyst | 0.2506 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 352 | 347 | Data Analyst | 0.2706 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 351 | 346 | Data Analyst | 0.2932 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 350 | 345 | Data Analyst | 0.3 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 349 | 344 | DevOps Engineer | 0.2393 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 348 | 343 | Data Analyst | 0.2902 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 347 | 342 | Data Analyst | 0.2489 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 346 | 341 | Data Analyst | 0.2783 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 345 | 340 | ML Engineer | 0.2236 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 344 | 339 | ML Engineer | 0.2297 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 343 | 338 | ML Engineer | 0.2257 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 342 | 337 | Data Analyst | 0.3051 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 341 | 336 | Data Analyst | 0.3322 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 340 | 335 | Data Analyst | 0.306 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 339 | 334 | Data Analyst | 0.2508 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 338 | 333 | Data Engineer | 0.2279 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 337 | 332 | Data Analyst | 0.2883 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
+| 336 | 331 | Data Analyst | 0.2928 | job_classifier | 472340fc8ca1 | 1 | PROMOTED | 1.0 | 2026-07-07 04:54:37.485847 |
 
 ## Prediction Category Distribution
 
 | model_name | model_run_id_short | model_registry_id | predicted_category | prediction_count | avg_confidence |
 | --- | --- | --- | --- | --- | --- |
-| job_classifier | 472340fc8ca1 | 1 | Data Analyst | 82 | 0.5876 |
-| job_classifier | 472340fc8ca1 | 1 | ML Engineer | 61 | 0.5869 |
-| job_classifier | 472340fc8ca1 | 1 | Backend Engineer | 55 | 0.7719 |
-| job_classifier | 472340fc8ca1 | 1 | Data Engineer | 52 | 0.7357 |
-| job_classifier | 472340fc8ca1 | 1 | DevOps Engineer | 50 | 0.7252 |
+| job_classifier | 472340fc8ca1 | 1 | Data Analyst | 120 | 0.4899 |
+| job_classifier | 472340fc8ca1 | 1 | ML Engineer | 69 | 0.5462 |
+| job_classifier | 472340fc8ca1 | 1 | Backend Engineer | 60 | 0.7297 |
+| job_classifier | 472340fc8ca1 | 1 | Data Engineer | 54 | 0.7181 |
+| job_classifier | 472340fc8ca1 | 1 | DevOps Engineer | 52 | 0.7082 |
 
 ## Check Result Summary
 
 | check_type | status | check_count | latest_checked_at |
 | --- | --- | --- | --- |
 | DATA_QUALITY | FAIL | 5 | 2026-06-26 06:12:21.333917 |
-| DATA_QUALITY | PASS | 121 | 2026-07-02 08:10:11.532182 |
+| DATA_QUALITY | PASS | 128 | 2026-07-07 04:54:05.405057 |
 | MODEL_PERFORMANCE | FAIL | 3 | 2026-07-02 07:31:10.014846 |
-| MODEL_PERFORMANCE | PASS | 27 | 2026-07-02 08:10:32.328787 |
+| MODEL_PERFORMANCE | PASS | 29 | 2026-07-07 04:54:33.920874 |
 | PREDICTION_QUALITY | FAIL | 2 | 2026-07-02 07:50:14.684391 |
-| PREDICTION_QUALITY | PASS | 6 | 2026-07-02 08:10:36.254854 |
+| PREDICTION_QUALITY | PASS | 10 | 2026-07-07 04:54:38.238387 |
 
 ## Latest Check Details
 
 | check_type | check_name | status | metric_value | threshold_value | message | task_id | checked_at |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| PREDICTION_QUALITY | null_confidence_count | PASS | 0.0 | 0.0 | null_confidence_count=0, required = 0 | check_prediction_quality | 2026-07-07 04:54:38.238387 |
+| PREDICTION_QUALITY | low_confidence_ratio | PASS | 0.3171 | 0.4 | low_confidence_count=111, prediction_count=350, low_confidence_ratio=0.3171, allowed <= 0.4000 | check_prediction_quality | 2026-07-07 04:54:38.238387 |
+| PREDICTION_QUALITY | avg_prediction_confidence | PASS | 0.612 | 0.6 | avg_confidence=0.6120, required >= 0.6000 | check_prediction_quality | 2026-07-07 04:54:38.238387 |
+| PREDICTION_QUALITY | prediction_count | PASS | 350.0 | 1.0 | prediction_count=350, required >= 1 | check_prediction_quality | 2026-07-07 04:54:38.238387 |
+| MODEL_PERFORMANCE | f1_weighted | PASS | 0.8935 | 0.7 | f1_weighted=0.8935, required>=0.7000, run_id=b13f51c25aab437f9cce714e794d4425 | check_model_performance | 2026-07-07 04:54:33.920874 |
+| MODEL_PERFORMANCE | accuracy | PASS | 0.8952 | 0.7 | accuracy=0.8952, required>=0.7000, run_id=b13f51c25aab437f9cce714e794d4425 | check_model_performance | 2026-07-07 04:54:33.920874 |
+| DATA_QUALITY | unknown_ratio | PASS |  |  | unknown count = 0, unknown ratio = 0.0000, allowed <= 0.5 | check_training_data | 2026-07-07 04:54:05.405057 |
+| DATA_QUALITY | category_diversity | PASS |  |  | distinct category count = 5, required >= 2 | check_training_data | 2026-07-07 04:54:05.405057 |
+| DATA_QUALITY | job_category_not_empty | PASS |  |  | empty job_category count = 0 | check_training_data | 2026-07-07 04:54:05.405057 |
+| DATA_QUALITY | text_for_model_not_empty | PASS |  |  | empty text_for_model count = 0 | check_training_data | 2026-07-07 04:54:05.405057 |
+| DATA_QUALITY | job_post_skills_count | PASS |  |  | job_post_skills count = 1448 | check_training_data | 2026-07-07 04:54:05.405057 |
+| DATA_QUALITY | cleaned_job_posts_count | PASS |  |  | cleaned_job_posts count = 350, required >= 50 | check_training_data | 2026-07-07 04:54:05.405057 |
+| DATA_QUALITY | raw_job_posts_count | PASS |  |  | raw_job_posts count = 350 | check_training_data | 2026-07-07 04:54:05.405057 |
 | PREDICTION_QUALITY | null_confidence_count | PASS | 0.0 | 0.0 | null_confidence_count=0, required = 0 | check_prediction_quality | 2026-07-02 08:10:36.254854 |
 | PREDICTION_QUALITY | low_confidence_ratio | PASS | 0.2033 | 0.4 | low_confidence_count=61, prediction_count=300, low_confidence_ratio=0.2033, allowed <= 0.4000 | check_prediction_quality | 2026-07-02 08:10:36.254854 |
 | PREDICTION_QUALITY | avg_prediction_confidence | PASS | 0.6699 | 0.6 | avg_confidence=0.6699, required >= 0.6000 | check_prediction_quality | 2026-07-02 08:10:36.254854 |
@@ -100,19 +114,6 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 | MODEL_PERFORMANCE | accuracy | PASS | 0.9333 | 0.7 | accuracy=0.9333, required>=0.7000, run_id=9ee1953de09a448082d0577975ee6dd1 | check_model_performance | 2026-07-02 08:08:29.224688 |
 | DATA_QUALITY | unknown_ratio | PASS |  |  | unknown count = 0, unknown ratio = 0.0000, allowed <= 0.5 | check_training_data | 2026-07-02 08:08:08.873243 |
 | DATA_QUALITY | category_diversity | PASS |  |  | distinct category count = 5, required >= 2 | check_training_data | 2026-07-02 08:08:08.873243 |
-| DATA_QUALITY | job_category_not_empty | PASS |  |  | empty job_category count = 0 | check_training_data | 2026-07-02 08:08:08.873243 |
-| DATA_QUALITY | text_for_model_not_empty | PASS |  |  | empty text_for_model count = 0 | check_training_data | 2026-07-02 08:08:08.873243 |
-| DATA_QUALITY | job_post_skills_count | PASS |  |  | job_post_skills count = 1408 | check_training_data | 2026-07-02 08:08:08.873243 |
-| DATA_QUALITY | cleaned_job_posts_count | PASS |  |  | cleaned_job_posts count = 300, required >= 50 | check_training_data | 2026-07-02 08:08:08.873243 |
-| DATA_QUALITY | raw_job_posts_count | PASS |  |  | raw_job_posts count = 300 | check_training_data | 2026-07-02 08:08:08.873243 |
-| MODEL_PERFORMANCE | f1_weighted | PASS | 0.9338 | 0.7 | f1_weighted=0.9338, required>=0.7000, run_id=376280f012fb45b188a19db1a757ca39 | check_model_performance | 2026-07-02 07:53:32.349949 |
-| MODEL_PERFORMANCE | accuracy | PASS | 0.9333 | 0.7 | accuracy=0.9333, required>=0.7000, run_id=376280f012fb45b188a19db1a757ca39 | check_model_performance | 2026-07-02 07:53:32.349949 |
-| DATA_QUALITY | unknown_ratio | PASS |  |  | unknown count = 0, unknown ratio = 0.0000, allowed <= 0.5 | check_training_data | 2026-07-02 07:53:10.468262 |
-| DATA_QUALITY | category_diversity | PASS |  |  | distinct category count = 5, required >= 2 | check_training_data | 2026-07-02 07:53:10.468262 |
-| DATA_QUALITY | job_category_not_empty | PASS |  |  | empty job_category count = 0 | check_training_data | 2026-07-02 07:53:10.468262 |
-| DATA_QUALITY | text_for_model_not_empty | PASS |  |  | empty text_for_model count = 0 | check_training_data | 2026-07-02 07:53:10.468262 |
-| DATA_QUALITY | job_post_skills_count | PASS |  |  | job_post_skills count = 1408 | check_training_data | 2026-07-02 07:53:10.468262 |
-| DATA_QUALITY | cleaned_job_posts_count | PASS |  |  | cleaned_job_posts count = 300, required >= 50 | check_training_data | 2026-07-02 07:53:10.468262 |
 
 ## Failed Checks
 
@@ -134,30 +135,31 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 | status | count | avg_accuracy | avg_f1_weighted | latest_created_at |
 | --- | --- | --- | --- | --- |
 | PROMOTED | 1 | 1.0 | 1.0 | 2026-06-26 06:30:29.537676 |
-| REJECTED | 11 | 0.9588 | 0.9592 | 2026-07-02 08:10:34.204635 |
+| REJECTED | 12 | 0.9535 | 0.9537 | 2026-07-07 04:54:35.679136 |
 
 ## Raw Job Count by Source
 
 | source | raw_count | first_crawled_at | latest_crawled_at |
 | --- | --- | --- | --- |
 | sample | 250 | 2026-07-02 07:53:06.458791 | 2026-07-02 07:53:06.458791 |
-| remoteok | 50 | 2026-07-02 08:10:09.754637 | 2026-07-02 08:10:09.754637 |
+| remoteok | 100 | 2026-07-02 08:10:09.754637 | 2026-07-07 04:54:03.466576 |
 
 ## Cleaned Job Quality by Source
 
 | source | cleaned_count | unknown_count | unknown_ratio | category_count |
 | --- | --- | --- | --- | --- |
 | sample | 250 | 0 | 0.0 | 5 |
-| remoteok | 50 | 0 | 0.0 | 4 |
+| remoteok | 100 | 0 | 0.0 | 5 |
 
 ## Job Category Distribution by Source
 
 | source | job_category | count | source_ratio |
 | --- | --- | --- | --- |
-| remoteok | Data Analyst | 34 | 0.68 |
-| remoteok | DevOps Engineer | 8 | 0.16 |
-| remoteok | ML Engineer | 7 | 0.14 |
-| remoteok | Data Engineer | 1 | 0.02 |
+| remoteok | Data Analyst | 71 | 0.71 |
+| remoteok | ML Engineer | 15 | 0.15 |
+| remoteok | DevOps Engineer | 11 | 0.11 |
+| remoteok | Backend Engineer | 2 | 0.02 |
+| remoteok | Data Engineer | 1 | 0.01 |
 | sample | DevOps Engineer | 52 | 0.208 |
 | sample | Backend Engineer | 50 | 0.2 |
 | sample | Data Engineer | 50 | 0.2 |
@@ -168,20 +170,23 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 
 | source | cleaned_count | extracted_skill_count | avg_skills_per_job |
 | --- | --- | --- | --- |
-| remoteok | 50 | 21 | 0.42 |
+| remoteok | 100 | 61 | 0.61 |
 | sample | 250 | 1387 | 5.548 |
 
 ## Top Skills by Source
 
 | source | skill_name | count |
 | --- | --- | --- |
-| remoteok | Excel | 14 |
-| remoteok | Python | 3 |
-| remoteok | SQL | 2 |
-| remoteok | Spark | 1 |
-| remoteok | JavaScript | 1 |
-| sample | AWS | 97 |
+| remoteok | Excel | 42 |
+| remoteok | SQL | 5 |
+| remoteok | Python | 4 |
+| remoteok | JavaScript | 3 |
+| remoteok | Tableau | 2 |
+| remoteok | Linux | 2 |
+| remoteok | Spark | 2 |
+| remoteok | Pandas | 1 |
 | sample | Linux | 97 |
+| sample | AWS | 97 |
 | sample | Docker | 92 |
 | sample | SQL | 88 |
 | sample | PostgreSQL | 82 |
@@ -189,8 +194,8 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 | sample | Kubernetes | 79 |
 | sample | Python | 76 |
 | sample | Pandas | 62 |
-| sample | Kafka | 52 |
 | sample | Redis | 52 |
+| sample | Kafka | 52 |
 | sample | Spring | 38 |
 | sample | Tableau | 34 |
 | sample | Azure | 30 |
@@ -217,12 +222,13 @@ This report summarizes model registry, prediction lineage, and pipeline check re
 
 | source | predicted_category | prediction_count | avg_confidence | low_confidence_count | low_confidence_ratio |
 | --- | --- | --- | --- | --- | --- |
-| remoteok | Data Analyst | 32 | 0.2545 | 32 | 1.0 |
-| remoteok | ML Engineer | 11 | 0.2288 | 11 | 1.0 |
-| remoteok | Backend Engineer | 5 | 0.227 | 5 | 1.0 |
-| remoteok | Data Engineer | 2 | 0.2357 | 2 | 1.0 |
-| sample | DevOps Engineer | 50 | 0.7252 | 3 | 0.06 |
+| remoteok | Data Analyst | 69 | 0.2669 | 69 | 1.0 |
+| remoteok | ML Engineer | 18 | 0.2279 | 18 | 1.0 |
+| remoteok | Backend Engineer | 9 | 0.2297 | 9 | 1.0 |
+| remoteok | Data Engineer | 3 | 0.2331 | 3 | 1.0 |
+| remoteok | DevOps Engineer | 1 | 0.2393 | 1 | 1.0 |
 | sample | ML Engineer | 50 | 0.6656 | 8 | 0.16 |
 | sample | Backend Engineer | 50 | 0.8264 | 0 | 0.0 |
 | sample | Data Engineer | 50 | 0.7557 | 0 | 0.0 |
 | sample | Data Analyst | 50 | 0.8008 | 0 | 0.0 |
+| sample | DevOps Engineer | 50 | 0.7252 | 3 | 0.06 |
