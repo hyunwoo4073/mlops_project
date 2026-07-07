@@ -106,6 +106,11 @@ def run_notify_pipeline_status():
     from src.notification.notify_pipeline_status import main
     main()
 
+
+def run_check_prediction_drift():
+    from src.quality.check_prediction_drift import main
+    main()
+
 with DAG(
     dag_id="jobskill_mlops_pipeline",
     description="JobSkill MLOps pipeline with validation, model promotion, lineage, reporting, and data source modes",
@@ -184,6 +189,11 @@ with DAG(
         python_callable=run_check_prediction_quality,
     )
 
+    check_prediction_drift = PythonOperator(
+        task_id="check_prediction_drift",
+        python_callable=run_check_prediction_drift,
+    )
+
     (
         prepare_raw_sources
         >> generate_sample_jobs
@@ -196,6 +206,7 @@ with DAG(
         >> promote_model
         >> batch_inference
         >> check_prediction_quality
+        >> check_prediction_drift
         >> generate_pipeline_report
         >> notify_pipeline_status
     )
