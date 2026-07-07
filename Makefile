@@ -1,7 +1,7 @@
 .PHONY: help build up down restart ps logs \
         db-init airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        test test-container lint ci \
+        test test-container lint ci smoke notify api-sample \
         report dashboard dashboard-logs \
         api api-logs mlflow-logs \
         psql clean-runtime
@@ -35,6 +35,7 @@ help:
 	@echo "  make test              Run local pytest"
 	@echo "  make test-container    Run pytest in Airflow container"
 	@echo "  make ci                Run lint and pytest"
+	@echo "  make smoke             Run service smoke checks"
 	@echo ""
 	@echo "Reports / Apps"
 	@echo "  make report            Generate pipeline report"
@@ -42,6 +43,10 @@ help:
 	@echo "  make dashboard-logs    Show dashboard logs"
 	@echo "  make api               Start FastAPI"
 	@echo "  make api-logs          Show FastAPI logs"
+	@echo "  make api-sample        Send sample prediction requests to FastAPI"
+	@echo ""
+	@echo "Notification"
+	@echo "  make notify            Send or print pipeline status notification"
 	@echo ""
 
 build:
@@ -111,8 +116,14 @@ test-container:
 
 ci: lint test
 
+smoke:
+	./scripts/smoke_check.sh
+
 report:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
+
+notify:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"
 
 dashboard:
 	docker compose up -d dashboard
@@ -134,3 +145,6 @@ clean-runtime:
 	rm -rf reports/*
 	rm -rf data/raw/*
 	rm -rf data/processed/*
+
+api-sample:
+	python scripts/send_sample_api_requests.py

@@ -5,7 +5,7 @@
 
 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, Streamlit 기반 운영 대시보드, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, Streamlit 기반 운영 대시보드, Pipeline Notification, 샘플 API 요청 검증, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동/API 예측 로그 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 주요 업데이트 내역
 
@@ -13,10 +13,23 @@
 2026-07-03
 - Makefile 기반 실행 명령어 표준화 추가
 - scripts/smoke_check.sh 기반 로컬 smoke check 추가
+- smoke check에 FastAPI sample prediction request 검증 추가
+- smoke check에서 api_prediction_logs 저장 여부 검증 추가
+- smoke check에서 model_predictions.prediction_source=API 저장 여부 검증 추가
+- scripts/send_sample_api_requests.py 추가
+- FastAPI /predict 샘플 요청 자동 실행 기능 추가
+- API prediction log와 API prediction row 검증 흐름 추가
+- src/notification/notify_pipeline_status.py 추가
+- Pipeline Notification 메시지 생성 기능 추가
+- Slack Webhook 기반 알림 전송 옵션 추가
+- ALERT_ENABLED / ALERT_ONLY_ON_FAILURE / SLACK_WEBHOOK_URL 환경변수 추가
+- Makefile에 smoke / notify / api-sample 명령어 추가
 - GitHub Actions 기반 Docker Compose smoke check workflow 추가
 - Smoke workflow에서 API 기동 전 sample 기반 최소 파이프라인 실행 및 promoted model 생성 검증 추가
+- GitHub Actions smoke workflow에서 API / Dashboard smoke check 수행
 - README 상단 GitHub Actions badge 추가
 - CHANGELOG.md 기반 MVP release 기록 추가
+- .gitattributes 기반 line ending 관리 추가
 - GitHub Actions 기반 pytest 자동 실행 workflow 추가
 - Ruff 기반 코드 품질 검사 CI 추가
 - requirements-dev.txt / pyproject.toml 추가
@@ -26,14 +39,6 @@
 - Docker Compose dashboard 서비스 추가
 - Dashboard 화면 캡처 docs/images/dashboard.png 추가
 - README에 Dashboard 실행 방법 / 접속 정보 / 스크린샷 반영
-Makefile 추가 및 주요 명령어 표준화
-scripts/smoke_check.sh 추가
-로컬 Docker Compose smoke check 검증
-GitHub Actions smoke.yml 추가
-CI smoke workflow에서 sample 기반 최소 파이프라인 실행 후 API / Dashboard smoke check 수행
-README badge 추가
-CHANGELOG.md 기반 MVP release 정리
-.gitattributes 기반 line ending 관리 추가
 - 다음 개선 예정에서 완료 항목 정리
 
 2026-07-02
@@ -81,8 +86,10 @@ CHANGELOG.md 기반 MVP release 정리
 → FastAPI 단건 예측
 → API prediction 저장
 → FastAPI 요청/응답 로그 저장
+→ 샘플 API 요청으로 API prediction / API log 저장 검증
 → prediction lineage 저장
 → source별 / prediction quality / API quality 리포트 생성
+→ Pipeline Notification으로 모델/검증/예측/API 상태 요약
 → Streamlit Dashboard로 모델/데이터/API 품질 지표 시각화
 → FastAPI serving model 자동 reload
 → Airflow DAG로 전체 파이프라인 실행
@@ -144,6 +151,12 @@ flowchart LR
     QR --> DASH
     MR --> DASH
 
+    QR --> N[Pipeline Notification]
+    MR --> N
+    J --> N
+    AL --> N
+    N --> SLACK[Slack Webhook Optional]
+
     subgraph Orchestration
         L[Airflow DAG / PythonOperator]
     end
@@ -153,9 +166,11 @@ flowchart LR
         CI2[pytest]
         CI3[Ruff]
         CI4[Docker Compose Smoke Check]
+        CI5[Sample API Request Validation]
         CI1 --> CI2
         CI1 --> CI3
         CI1 --> CI4
+        CI4 --> CI5
     end
 
     L --> PREP
@@ -169,6 +184,7 @@ flowchart LR
     L --> I
     L --> Q3
     L --> R
+    L --> N
 ```
 
 ## 현재 구성
@@ -198,9 +214,17 @@ Docker Compose
 │   ├── pipeline check 결과 조회
 │   ├── FastAPI prediction logs 조회
 │   └── recent predictions 조회
+├── Pipeline Notification
+│   ├── latest promoted model 요약
+│   ├── pipeline check summary 요약
+│   ├── failed check 요약
+│   ├── prediction quality 요약
+│   ├── API status / latency 요약
+│   └── Slack Webhook 전송 옵션
 └── Local / CI Validation
     ├── Makefile 명령어 표준화
     ├── scripts/smoke_check.sh
+    ├── scripts/send_sample_api_requests.py
     ├── GitHub Actions Python CI
     └── GitHub Actions Smoke Check
 ```
@@ -216,6 +240,7 @@ Preprocessing   : pandas
 Model           : scikit-learn
 API             : FastAPI
 Dashboard       : Streamlit, Plotly
+Notification    : Slack Incoming Webhook, requests
 Crawler         : requests, BeautifulSoup
 Test            : pytest
 Code Quality    : Ruff
@@ -259,6 +284,7 @@ Container       : Docker Compose
 │   └── report_queries.sql
 ├── scripts/
 │   ├── generate_sample_jobs.py
+│   ├── send_sample_api_requests.py
 │   └── smoke_check.sh
 ├── src/
 │   ├── common/
@@ -274,6 +300,9 @@ Container       : Docker Compose
 │   ├── ingestion/
 │   │   ├── prepare_raw_sources.py
 │   │   └── load_raw_jobs.py
+│   ├── notification/
+│   │   ├── __init__.py
+│   │   └── notify_pipeline_status.py
 │   ├── preprocessing/
 │   │   ├── clean_text.py
 │   │   ├── extract_skills.py
@@ -350,6 +379,10 @@ data/raw/sample_jobs.csv
 
 ```env
 DATA_SOURCE_MODE=mixed
+
+ALERT_ENABLED=false
+ALERT_ONLY_ON_FAILURE=false
+SLACK_WEBHOOK_URL=
 ```
 
 지원 모드:
@@ -758,6 +791,8 @@ batch_inference
 check_prediction_quality
     ↓
 generate_pipeline_report
+    ↓
+notify_pipeline_status
 ```
 
 예측 품질 기준을 통과하지 못하면 DAG를 실패시켜, 낮은 품질의 예측 결과가 정상 산출물처럼 리포트되지 않도록 합니다.
@@ -835,6 +870,45 @@ api_prediction_logs
 FastAPI는 시작 시점에 모델을 로드하며, 요청 시점에 현재 promoted model metadata를 확인합니다. 모델 파일 또는 registry 정보가 변경되면 새 모델을 자동으로 reload합니다.
 
 <img src="docs/images/fastapi.png" width="900">
+
+
+### 15-1. Sample API Requests
+
+`scripts/send_sample_api_requests.py`
+
+FastAPI `/predict` 엔드포인트가 정상적으로 동작하고, API 예측 결과와 요청 로그가 PostgreSQL에 저장되는지 확인하기 위한 샘플 요청 스크립트입니다.
+
+검증 내용:
+
+```text
+GET /
+GET /model
+POST /predict
+API prediction 저장
+api_prediction_logs 저장
+prediction_source=API 저장
+```
+
+실행:
+
+```bash
+make api-sample
+```
+
+또는 직접 실행:
+
+```bash
+python scripts/send_sample_api_requests.py
+```
+
+실행 후 아래 테이블에 API 요청 결과가 저장됩니다.
+
+```text
+model_predictions.prediction_source = API
+api_prediction_logs.status = SUCCESS
+```
+
+이 스크립트는 로컬 검증뿐 아니라 smoke check에서도 사용되어, API가 단순히 기동된 상태를 넘어 실제 예측 요청과 DB 저장까지 정상 동작하는지 확인합니다.
 
 ### 16. Pipeline Report
 
@@ -914,6 +988,58 @@ http://localhost:8501
 
 <img src="docs/images/dashboard.png" width="900">
 
+
+### 16-2. Pipeline Notification
+
+`src/notification/notify_pipeline_status.py`
+
+PostgreSQL에 저장된 파이프라인 실행 결과를 조회해 운영 상태 요약 메시지를 생성합니다.
+
+확인 항목:
+
+```text
+Latest promoted model
+Recent pipeline check summary
+Recent failed checks
+Prediction count / confidence summary
+API request status / latency summary
+```
+
+환경변수:
+
+```env
+ALERT_ENABLED=false
+ALERT_ONLY_ON_FAILURE=false
+SLACK_WEBHOOK_URL=
+```
+
+동작 방식:
+
+```text
+ALERT_ENABLED=false
+→ Slack 전송 없이 콘솔에 메시지만 출력
+
+ALERT_ENABLED=true
+→ SLACK_WEBHOOK_URL이 있으면 Slack으로 전송
+
+ALERT_ONLY_ON_FAILURE=true
+→ failed check가 있을 때만 전송
+```
+
+실행:
+
+```bash
+make notify
+```
+
+또는 직접 실행:
+
+```bash
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"
+```
+
+`SLACK_WEBHOOK_URL`은 실제 운영 또는 개인 Slack 테스트 시 `.env`에만 추가하고 Git에는 포함하지 않습니다. `.env.example`에는 빈 값만 유지합니다.
+
 ### 17. Airflow DAG
 
 `dags/jobskill_pipeline_dag.py`
@@ -944,6 +1070,8 @@ batch_inference
 check_prediction_quality
     ↓
 generate_pipeline_report
+    ↓
+notify_pipeline_status
 ```
 
 DAG 이름:
@@ -963,6 +1091,8 @@ BashOperator
 PythonOperator
 → 각 모듈의 main() 함수 직접 호출
 ```
+
+마지막 단계에서는 `notify_pipeline_status` task를 통해 모델/검증/예측/API 상태 요약 메시지를 생성합니다. Slack webhook이 설정되어 있지 않으면 콘솔 출력만 수행합니다.
 
 <img src="docs/images/Airflow%20DAG%20success.png" width="900">
 
@@ -1207,7 +1337,7 @@ print("AIRFLOW_FERNET_KEY=" + Fernet.generate_key().decode())
 PY
 ```
 
-`.env`, Airflow 로그인 파일, 실행 로그, 모델 artifact 등은 Git에 포함하지 않습니다.
+`.env`, Airflow 로그인 파일, 실행 로그, 모델 artifact, Slack Webhook URL 등은 Git에 포함하지 않습니다.
 
 ```gitignore
 .env
@@ -1384,6 +1514,8 @@ make dag-tasks
 make dag-trigger
 make report
 make dashboard
+make api-sample
+make notify
 make smoke
 make ci
 ```
@@ -1404,10 +1536,22 @@ make dashboard
 make ci
 ```
 
-`make smoke`는 로컬 Docker Compose 서비스의 기본 기동성과 주요 엔드포인트를 확인합니다.
+`make smoke`는 로컬 Docker Compose 서비스의 기본 기동성과 주요 엔드포인트, API 샘플 예측 요청, API 로그 저장 여부를 확인합니다.
 
 ```bash
 make smoke
+```
+
+`make api-sample`은 FastAPI에 샘플 `/predict` 요청을 보내고 API 예측 로그가 쌓이는지 확인합니다.
+
+```bash
+make api-sample
+```
+
+`make notify`는 pipeline check, prediction quality, API summary를 기반으로 알림 메시지를 생성합니다.
+
+```bash
+make notify
 ```
 
 ## 접속 정보
@@ -1551,6 +1695,8 @@ batch_inference
 check_prediction_quality
     ↓
 generate_pipeline_report
+    ↓
+notify_pipeline_status
 ```
 
 정상 상태 예시:
@@ -1568,6 +1714,7 @@ promote_model                success
 batch_inference              success
 check_prediction_quality      success
 generate_pipeline_report     success
+notify_pipeline_status        success
 ```
 
 파이프라인 실행 후 PostgreSQL에는 데이터, 검증 결과, 모델 승격 결과, 예측 결과가 저장됩니다.
@@ -1611,6 +1758,9 @@ Airflow pipeline task list
 MLflow UI
 FastAPI health
 FastAPI model info
+FastAPI sample prediction requests
+api_prediction_logs 저장 확인
+model_predictions API row 저장 확인
 Streamlit dashboard
 ```
 
@@ -1624,6 +1774,8 @@ PostgreSQL 실행
 → sample_only 기반 최소 파이프라인 실행
 → promoted model 생성 확인
 → API / Dashboard 실행
+→ FastAPI sample prediction request 실행
+→ api_prediction_logs / API prediction row 저장 확인
 → smoke_check.sh 실행
 ```
 
@@ -1644,6 +1796,7 @@ python src/training/promote_model.py
 python src/inference/batch_inference.py
 python src/quality/check_prediction_quality.py
 python src/reporting/generate_pipeline_report.py
+python src/notification/notify_pipeline_status.py
 ```
 
 컨테이너 내부에서 실행할 경우:
@@ -1661,6 +1814,7 @@ docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && pytho
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/inference/batch_inference.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_prediction_quality.py"
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
+docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"
 ```
 
 ## FastAPI 실행
@@ -1758,6 +1912,29 @@ curl -X POST "http://localhost:8000/predict" \
   "model_path": "models/best/job_classifier.pkl"
 }
 ```
+
+
+### Sample API Requests
+
+샘플 요청 스크립트를 통해 여러 직무 예시를 `/predict`로 전송할 수 있습니다.
+
+```bash
+make api-sample
+```
+
+직접 실행:
+
+```bash
+python scripts/send_sample_api_requests.py
+```
+
+환경변수로 API 주소를 바꿀 수 있습니다.
+
+```bash
+API_BASE_URL=http://localhost:8000 python scripts/send_sample_api_requests.py
+```
+
+실행 후 `api_prediction_logs`와 `model_predictions.prediction_source=API` row가 생성됩니다.
 
 ## PostgreSQL 확인 명령어
 
@@ -2096,10 +2273,12 @@ Airflow / MLflow start
 sample_only minimal pipeline run
 promoted model existence check
 FastAPI / Dashboard start
+Sample API prediction request run
+api_prediction_logs and API prediction rows validation
 scripts/smoke_check.sh run
 ```
 
-GitHub Actions의 빈 runner에서는 promoted model이 존재하지 않으므로, API를 시작하기 전에 최소 파이프라인을 먼저 실행해 `models/best/job_classifier.pkl`과 `model_registry`의 promoted model을 생성합니다.
+GitHub Actions의 빈 runner에서는 promoted model이 존재하지 않으므로, API를 시작하기 전에 최소 파이프라인을 먼저 실행해 `models/best/job_classifier.pkl`과 `model_registry`의 promoted model을 생성합니다. 이후 sample API request를 실행해 API 예측 결과와 요청 로그가 DB에 저장되는지도 함께 검증합니다.
 
 ## Release / Changelog
 
@@ -2126,6 +2305,8 @@ Makefile
 Local smoke check
 GitHub Actions Python CI
 GitHub Actions Docker Compose smoke check
+Sample API request validation
+Pipeline Notification
 ```
 
 태그 생성 예시:
@@ -2863,6 +3044,155 @@ git push --set-upstream origin feature/xxx
 
 이후부터는 같은 브랜치에서 `git push`만 실행하면 됩니다.
 
+
+### 23. Pipeline Notification에서 메시지가 두 번 출력되는 경우
+
+증상:
+
+```text
+[Pipeline Notification Message]
+...
+[Notification skipped] SLACK_WEBHOOK_URL is not set.
+...
+동일한 메시지가 한 번 더 출력됨
+```
+
+원인:
+
+```text
+main()에서 메시지를 한 번 출력하고,
+SLACK_WEBHOOK_URL이 없을 때 send_slack_message()에서도 같은 메시지를 다시 출력함
+```
+
+해결:
+
+```text
+SLACK_WEBHOOK_URL이 없을 때는 skip 메시지만 출력하고 message 본문은 재출력하지 않도록 수정
+```
+
+정상 출력:
+
+```text
+[Pipeline Notification Message]
+...
+[Notification skipped] SLACK_WEBHOOK_URL is not set.
+```
+
+### 24. Pipeline Notification에서 Latest Model이 REJECTED로 보이는 경우
+
+증상:
+
+```text
+Latest Model
+- status=REJECTED
+```
+
+원인:
+
+```text
+model_registry를 ORDER BY id DESC LIMIT 1로 조회하면
+가장 최근 학습 결과가 기존 best보다 낮아 REJECTED된 경우에도 최신 row로 표시됨
+```
+
+해결:
+
+```text
+알림에서 실제 serving 대상 모델을 보여주려면 status='PROMOTED' 조건으로 latest promoted model을 조회
+```
+
+예시:
+
+```sql
+SELECT *
+FROM model_registry
+WHERE status = 'PROMOTED'
+ORDER BY id DESC
+LIMIT 1;
+```
+
+### 25. Slack 알림이 전송되지 않는 경우
+
+증상:
+
+```text
+[Notification skipped] SLACK_WEBHOOK_URL is not set.
+```
+
+원인:
+
+```text
+.env에 SLACK_WEBHOOK_URL이 없거나,
+docker-compose.yml에서 airflow 컨테이너 환경변수로 전달되지 않음
+```
+
+확인:
+
+```bash
+docker compose exec airflow-scheduler bash -lc 'echo $ALERT_ENABLED'
+docker compose exec airflow-scheduler bash -lc 'echo $ALERT_ONLY_ON_FAILURE'
+docker compose exec airflow-scheduler bash -lc 'echo $SLACK_WEBHOOK_URL'
+```
+
+해결:
+
+```text
+.env에 SLACK_WEBHOOK_URL 추가
+docker-compose.yml의 Airflow 공통 environment에 ALERT_* / SLACK_WEBHOOK_URL 전달
+Airflow 컨테이너 force recreate
+```
+
+```bash
+docker compose up -d --force-recreate \
+  airflow-scheduler \
+  airflow-apiserver \
+  airflow-dag-processor \
+  airflow-triggerer
+```
+
+### 26. smoke check에서 API prediction log 검증 실패
+
+증상:
+
+```text
+[CHECK] API prediction logs
+[FAIL] API prediction logs
+```
+
+원인:
+
+```text
+FastAPI /predict 요청은 성공하지 않았거나,
+api_prediction_logs에 SUCCESS row가 저장되지 않음
+```
+
+확인:
+
+```bash
+make api-sample
+
+docker exec -it jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT id, prediction_id, request_title, response_category, status, created_at
+FROM api_prediction_logs
+ORDER BY id DESC
+LIMIT 10;
+"
+```
+
+해결 방향:
+
+```text
+FastAPI 컨테이너 로그 확인
+/model에서 promoted model 로드 여부 확인
+/predict 응답 확인
+api_prediction_logs INSERT 로직 확인
+```
+
+```bash
+docker compose logs --tail=100 api
+curl http://localhost:8000/model
+```
+
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -2900,6 +3230,10 @@ source/category별 prediction confidence 분석 리포트 구성
 GitHub Actions 기반 pytest 자동 실행 구성
 Ruff 기반 코드 품질 검사 CI 구성
 Streamlit / Plotly 기반 MLOps Dashboard 구성
+FastAPI sample request script를 통한 API 예측 흐름 검증
+smoke check에서 API prediction log 저장 여부 검증
+Pipeline Notification 기반 모델/검증/예측/API 상태 요약 구성
+Slack Webhook 기반 알림 전송 옵션 구성
 포트폴리오용 dashboard 스크린샷 및 sample pipeline report 문서화
 Makefile 기반 프로젝트 실행 명령어 표준화
 로컬 smoke check script를 통한 서비스 기동성 검증
@@ -2968,12 +3302,21 @@ Streamlit Dashboard 추가
 Docker Compose dashboard 서비스 추가
 Dashboard 스크린샷 docs/images/dashboard.png 추가
 README에 Dashboard 실행 방법 / 접속 정보 / 스크린샷 반영
+scripts/send_sample_api_requests.py 추가
+FastAPI sample prediction request 검증 추가
+smoke check에 API prediction log 저장 검증 추가
+src/notification/notify_pipeline_status.py 추가
+Pipeline Notification 메시지 생성 기능 추가
+Slack Webhook 알림 옵션 추가
+Makefile notify / api-sample 명령어 추가
 ```
 
 ## 다음 개선 예정
 
 ```text
-prediction quality 기반 Slack/Email 알림 추가
+Slack 알림 메시지 포맷 고도화(Block Kit 적용 검토)
+Email 알림 옵션 추가
+알림 정책 세분화(실패 시만 전송, confidence 급락 시 전송 등)
 크롤링 source 추가 또는 수집 데이터 다양화
 실제 운영 환경 기준 README 아키텍처 다이어그램 보강
 모델 성능 개선을 위한 데이터 라벨링/피처 개선

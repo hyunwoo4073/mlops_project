@@ -111,6 +111,32 @@ check_http \
   "FastAPI model info" \
   "http://localhost:8000/model"
 
+check_command \
+  "FastAPI sample prediction requests" \
+  "python scripts/send_sample_api_requests.py"
+
+check_command \
+  "API prediction logs" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM api_prediction_logs
+    WHERE status = 'SUCCESS';
+  \" | grep -q OK"
+
+check_command \
+  "API prediction rows" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM model_predictions
+    WHERE prediction_source = 'API';
+  \" | grep -q OK"
+
 check_http \
   "Streamlit dashboard" \
   "http://localhost:8501"
