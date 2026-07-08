@@ -10,6 +10,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from fastapi.responses import Response
+from src.monitoring.prometheus_metrics import build_metrics_text
 
 # 프로젝트 루트를 import path에 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -138,6 +140,12 @@ def get_model_info():
         "model_status": metadata.status,
     }
 
+@app.get("/metrics")
+def metrics():
+    return Response(
+        content=build_metrics_text(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 @app.post("/reload-model")
 def reload_model():

@@ -111,6 +111,14 @@ check_http \
   "FastAPI model info" \
   "http://localhost:8000/model"
 
+check_http \
+  "FastAPI metrics" \
+  "http://localhost:8000/metrics"
+
+check_command \
+  "FastAPI metrics content" \
+  "curl -fsS http://localhost:8000/metrics | grep -q jobskill_model_predictions_total"
+
 check_command \
   "FastAPI sample prediction requests" \
   "python scripts/send_sample_api_requests.py"
@@ -136,6 +144,18 @@ check_command \
     FROM model_predictions
     WHERE prediction_source = 'API';
   \" | grep -q OK"
+
+check_http \
+  "Prometheus UI" \
+  "http://localhost:9090/-/ready"
+
+check_command \
+  "Prometheus jobskill-api target" \
+  "curl -fsS 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22jobskill-api%22%7D' | grep -q '\"value\"'"
+
+check_http \
+  "Grafana health" \
+  "http://localhost:3000/api/health"
 
 check_http \
   "Streamlit dashboard" \
