@@ -8,6 +8,43 @@ echo " JobSkill MLOps Smoke Check"
 echo "========================================"
 echo ""
 
+print_related_logs() {
+  local name="$1"
+
+  echo ""
+  echo "[DEBUG] Related container logs"
+  echo "----------------------------------------"
+
+  if [[ "$name" == *"FastAPI"* || "$name" == *"API"* ]]; then
+    docker compose logs --tail=100 api || true
+  fi
+
+  if [[ "$name" == *"Streamlit"* || "$name" == *"Dashboard"* ]]; then
+    docker compose logs --tail=100 dashboard || true
+  fi
+
+  if [[ "$name" == *"Prometheus"* ]]; then
+    docker compose logs --tail=100 prometheus || true
+  fi
+
+  if [[ "$name" == *"Grafana"* ]]; then
+    docker compose logs --tail=100 grafana || true
+  fi
+
+  if [[ "$name" == *"MLflow"* ]]; then
+    docker compose logs --tail=100 mlflow || true
+  fi
+
+  if [[ "$name" == *"Airflow"* ]]; then
+    docker compose logs --tail=100 airflow-scheduler || true
+    docker compose logs --tail=100 airflow-apiserver || true
+  fi
+
+  if [[ "$name" == *"PostgreSQL"* || "$name" == *"Project tables"* || "$name" == *"Core table"* ]]; then
+    docker compose logs --tail=100 postgres || true
+  fi
+}
+
 check_command() {
   local name="$1"
   local command="$2"
@@ -20,6 +57,7 @@ check_command() {
     echo "[PASS] $name"
   else
     echo "[FAIL] $name"
+    print_related_logs "$name"
     exit 1
   fi
 }
@@ -39,6 +77,7 @@ check_http() {
     echo ""
   else
     echo "[FAIL] $name"
+    print_related_logs "$name"
     exit 1
   fi
 }
