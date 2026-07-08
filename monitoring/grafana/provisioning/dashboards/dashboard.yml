@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: JobSkill Dashboards
+    orgId: 1
+    folder: JobSkill MLOps
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

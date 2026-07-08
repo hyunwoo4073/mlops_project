@@ -8,6 +8,43 @@ echo " JobSkill MLOps Smoke Check"
 echo "========================================"
 echo ""
 
+print_related_logs() {
+  local name="$1"
+
+  echo ""
+  echo "[DEBUG] Related container logs"
+  echo "----------------------------------------"
+
+  if [[ "$name" == *"FastAPI"* || "$name" == *"API"* ]]; then
+    docker compose logs --tail=100 api || true
+  fi
+
+  if [[ "$name" == *"Streamlit"* || "$name" == *"Dashboard"* ]]; then
+    docker compose logs --tail=100 dashboard || true
+  fi
+
+  if [[ "$name" == *"Prometheus"* ]]; then
+    docker compose logs --tail=100 prometheus || true
+  fi
+
+  if [[ "$name" == *"Grafana"* ]]; then
+    docker compose logs --tail=100 grafana || true
+  fi
+
+  if [[ "$name" == *"MLflow"* ]]; then
+    docker compose logs --tail=100 mlflow || true
+  fi
+
+  if [[ "$name" == *"Airflow"* ]]; then
+    docker compose logs --tail=100 airflow-scheduler || true
+    docker compose logs --tail=100 airflow-apiserver || true
+  fi
+
+  if [[ "$name" == *"PostgreSQL"* || "$name" == *"Project tables"* || "$name" == *"Core table"* ]]; then
+    docker compose logs --tail=100 postgres || true
+  fi
+}
+
 check_command() {
   local name="$1"
   local command="$2"
@@ -20,6 +57,7 @@ check_command() {
     echo "[PASS] $name"
   else
     echo "[FAIL] $name"
+    print_related_logs "$name"
     exit 1
   fi
 }
@@ -39,6 +77,7 @@ check_http() {
     echo ""
   else
     echo "[FAIL] $name"
+    print_related_logs "$name"
     exit 1
   fi
 }
@@ -111,6 +150,14 @@ check_http \
   "FastAPI model info" \
   "http://localhost:8000/model"
 
+check_http \
+  "FastAPI metrics" \
+  "http://localhost:8000/metrics"
+
+check_command \
+  "FastAPI metrics content" \
+  "curl -fsS http://localhost:8000/metrics | grep -q jobskill_model_predictions_total"
+
 check_command \
   "FastAPI sample prediction requests" \
   "python scripts/send_sample_api_requests.py"
@@ -136,6 +183,18 @@ check_command \
     FROM model_predictions
     WHERE prediction_source = 'API';
   \" | grep -q OK"
+
+check_http \
+  "Prometheus UI" \
+  "http://localhost:9090/-/ready"
+
+check_command \
+  "Prometheus jobskill-api target" \
+  "curl -fsS 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22jobskill-api%22%7D' | grep -q '\"value\"'"
+
+check_http \
+  "Grafana health" \
+  "http://localhost:3000/api/health"
 
 check_http \
   "Streamlit dashboard" \

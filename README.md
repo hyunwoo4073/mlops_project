@@ -5,11 +5,27 @@
 
 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, Streamlit 기반 운영 대시보드, Pipeline Notification, 샘플 API 요청 검증, prediction drift gate, 운영 로그 retention cleanup, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동/API 예측 로그 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, prediction drift gate, 운영 로그 retention cleanup, FastAPI `/metrics` 운영 지표 노출, Prometheus 기반 metrics 수집, Grafana 기반 모니터링 대시보드, Streamlit 기반 운영 대시보드, Pipeline Notification, 샘플 API 요청 검증, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동/API 예측 로그 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 주요 업데이트 내역
 
 ```text
+2026-07-08
+- FastAPI `/metrics` 엔드포인트 추가
+- `src/monitoring/prometheus_metrics.py` 기반 Prometheus text format 운영 지표 생성
+- 모델 예측 수, 평균 confidence, low confidence 비율, API 요청 수/latency, pipeline check 결과, latest promoted model 성능 지표 노출
+- `monitoring/prometheus/prometheus.yml` 추가
+- Docker Compose Prometheus 서비스 추가
+- Makefile에 `metrics` / `prometheus` / `prometheus-logs` 명령어 추가
+- Prometheus target `jobskill-api` scrape 구성
+- Grafana datasource / dashboard provisioning 구성 추가
+- `monitoring/grafana/provisioning` 및 `monitoring/grafana/dashboards/jobskill-mlops-overview.json` 추가
+- Docker Compose Grafana 서비스 추가
+- Makefile에 `grafana` / `grafana-logs` 명령어 추가
+- Grafana dashboard 화면 캡처 `docs/images/grafana.png` 추가
+- smoke check에 FastAPI metrics / Prometheus / Grafana health 검증 추가
+- README에 Prometheus / Grafana 실행 방법, 접속 정보, 주요 query, 스크린샷 반영
+
 2026-07-03
 - Makefile 기반 실행 명령어 표준화 추가
 - scripts/smoke_check.sh 기반 로컬 smoke check 추가
@@ -100,6 +116,9 @@
 → source별 / prediction quality / API quality 리포트 생성
 → Pipeline Notification으로 모델/검증/예측/API 상태 요약
 → retention cleanup으로 오래된 API 로그/예측/검증 결과 정리
+→ FastAPI `/metrics`로 운영 지표 노출
+→ Prometheus로 운영 지표 수집
+→ Grafana Dashboard로 Prometheus 지표 시각화
 → Streamlit Dashboard로 모델/데이터/API 품질 지표 시각화
 → FastAPI serving model 자동 reload
 → Airflow DAG로 전체 파이프라인 실행
@@ -148,6 +167,7 @@ flowchart LR
     BM --> K
     K --> J
     K --> AL[api_prediction_logs]
+    K --> MET[FastAPI /metrics]
 
     QR --> R[Pipeline Report]
     MR --> R
@@ -172,6 +192,9 @@ flowchart LR
     AL --> MNT
     QR --> MNT
 
+    MET --> PROM[Prometheus]
+    PROM --> GRAFANA[Grafana Dashboard]
+
     subgraph Orchestration
         L[Airflow DAG / PythonOperator]
     end
@@ -182,10 +205,12 @@ flowchart LR
         CI3[Ruff]
         CI4[Docker Compose Smoke Check]
         CI5[Sample API Request Validation]
+        CI6[Metrics / Prometheus / Grafana Health Check]
         CI1 --> CI2
         CI1 --> CI3
         CI1 --> CI4
         CI4 --> CI5
+        CI4 --> CI6
     end
 
     L --> PREP
@@ -222,7 +247,8 @@ Docker Compose
 ├── FastAPI
 │   ├── /predict
 │   ├── /model
-│   └── /reload-model
+│   ├── /reload-model
+│   └── /metrics
 ├── Streamlit Dashboard
 │   ├── latest promoted model 조회
 │   ├── source별 데이터 품질 조회
@@ -243,6 +269,11 @@ Docker Compose
 │   ├── API prediction row retention cleanup
 │   ├── pipeline_check_results retention cleanup
 │   └── dry-run 기반 삭제 대상 사전 확인
+├── Monitoring
+│   ├── FastAPI /metrics 운영 지표 노출
+│   ├── Prometheus jobskill-api scrape
+│   ├── Grafana datasource provisioning
+│   └── Grafana JobSkill MLOps Overview dashboard
 └── Local / CI Validation
     ├── Makefile 명령어 표준화
     ├── scripts/smoke_check.sh
@@ -261,7 +292,8 @@ ML Lifecycle    : MLflow
 Preprocessing   : pandas
 Model           : scikit-learn
 API             : FastAPI
-Dashboard       : Streamlit, Plotly
+Dashboard       : Streamlit, Plotly, Grafana
+Monitoring      : Prometheus, Prometheus Text Format
 Notification    : Slack Incoming Webhook, requests
 Maintenance     : Retention Cleanup Script
 Crawler         : requests, BeautifulSoup
@@ -309,6 +341,17 @@ Container       : Docker Compose
 │   ├── generate_sample_jobs.py
 │   ├── send_sample_api_requests.py
 │   └── smoke_check.sh
+├── monitoring/
+│   ├── prometheus/
+│   │   └── prometheus.yml
+│   └── grafana/
+│       ├── provisioning/
+│       │   ├── datasources/
+│       │   │   └── prometheus.yml
+│       │   └── dashboards/
+│       │       └── dashboard.yml
+│       └── dashboards/
+│           └── jobskill-mlops-overview.json
 ├── src/
 │   ├── common/
 │   │   ├── db.py
@@ -329,6 +372,9 @@ Container       : Docker Compose
 │   ├── maintenance/
 │   │   ├── __init__.py
 │   │   └── cleanup_old_records.py
+│   ├── monitoring/
+│   │   ├── __init__.py
+│   │   └── prometheus_metrics.py
 │   ├── preprocessing/
 │   │   ├── clean_text.py
 │   │   ├── extract_skills.py
@@ -365,6 +411,7 @@ Container       : Docker Compose
 │       ├── Airflow DAG success.png
 │       ├── dashboard.png
 │       ├── fastapi.png
+│       ├── grafana.png
 │       ├── mlflow.png
 │       └── postgresql.png
 └── notebooks/
@@ -918,6 +965,7 @@ WHERE COALESCE(prediction_source, 'BATCH') = 'BATCH';
 ```text
 GET  /
 GET  /model
+GET  /metrics
 POST /reload-model
 POST /predict
 ```
@@ -990,6 +1038,55 @@ api_prediction_logs.status = SUCCESS
 ```
 
 이 스크립트는 로컬 검증뿐 아니라 smoke check에서도 사용되어, API가 단순히 기동된 상태를 넘어 실제 예측 요청과 DB 저장까지 정상 동작하는지 확인합니다.
+
+
+### 15-2. Prometheus Metrics
+
+`src/monitoring/prometheus_metrics.py`  
+`GET /metrics`
+
+FastAPI `/metrics` 엔드포인트를 통해 PostgreSQL에 저장된 MLOps 운영 지표를 Prometheus text format으로 노출합니다.
+
+노출 지표 예시:
+
+```text
+raw job count by source
+cleaned job count by source
+top skill count
+prediction count by source
+average prediction confidence
+low confidence prediction ratio
+prediction category distribution
+API request count by status
+API average latency
+pipeline check result count
+model registry count
+latest promoted model accuracy / f1_weighted
+```
+
+확인:
+
+```bash
+curl -fsS http://localhost:8000/metrics | head -50
+```
+
+또는 Makefile 명령어:
+
+```bash
+make metrics
+```
+
+예시 지표:
+
+```text
+jobskill_model_predictions_total{prediction_source="BATCH"} 350
+jobskill_model_predictions_total{prediction_source="API"} 10
+jobskill_model_prediction_low_confidence_ratio{prediction_source="BATCH"} 0.3171
+jobskill_api_prediction_requests_total{status="SUCCESS"} 10
+jobskill_latest_promoted_model_f1_weighted{model_registry_id="12"} 0.9338
+```
+
+이 엔드포인트는 Prometheus를 붙이기 전 단계에서 서비스가 외부 모니터링 시스템에 제공할 운영 지표를 표준화하는 역할을 합니다.
 
 ### 16. Pipeline Report
 
@@ -1159,6 +1256,100 @@ make cleanup
 docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/maintenance/cleanup_old_records.py"
 ```
 
+
+
+### 16-4. Prometheus
+
+`monitoring/prometheus/prometheus.yml`
+
+FastAPI `/metrics` 엔드포인트를 Prometheus가 주기적으로 scrape하도록 구성합니다.
+
+수집 대상:
+
+```text
+api:8000/metrics
+```
+
+실행:
+
+```bash
+make prometheus
+```
+
+접속:
+
+```text
+http://localhost:9090
+```
+
+Target 확인:
+
+```text
+http://localhost:9090/targets
+```
+
+주요 Prometheus query:
+
+```text
+jobskill_model_predictions_total
+jobskill_model_prediction_avg_confidence
+jobskill_model_prediction_low_confidence_ratio
+jobskill_api_prediction_requests_total
+jobskill_api_prediction_avg_latency_ms
+jobskill_pipeline_check_results_total
+jobskill_latest_promoted_model_f1_weighted
+```
+
+`jobskill-api` target이 `UP`이면 FastAPI `/metrics` endpoint를 정상적으로 수집하고 있는 상태입니다.
+
+### 16-5. Grafana Dashboard
+
+`monitoring/grafana/provisioning/datasources/prometheus.yml`  
+`monitoring/grafana/provisioning/dashboards/dashboard.yml`  
+`monitoring/grafana/dashboards/jobskill-mlops-overview.json`
+
+Prometheus가 수집한 JobSkill MLOps metrics를 Grafana에서 시각화합니다.
+
+실행:
+
+```bash
+make grafana
+```
+
+접속:
+
+```text
+http://localhost:3000
+```
+
+기본 계정:
+
+```text
+admin / admin
+```
+
+확인 가능한 지표:
+
+```text
+Batch/API prediction count
+latest promoted model accuracy/f1
+average prediction confidence
+low confidence ratio
+prediction category distribution
+pipeline check results
+API average latency
+raw job count by source
+```
+
+대시보드는 provisioning으로 자동 등록되며, Grafana 접속 후 아래 경로에서 확인할 수 있습니다.
+
+```text
+Dashboards
+→ JobSkill MLOps
+→ JobSkill MLOps Overview
+```
+
+<img src="docs/images/grafana.png" width="900">
 
 ### 17. Airflow DAG
 
@@ -1414,6 +1605,9 @@ ALERT_ENABLED=false
 ALERT_ONLY_ON_FAILURE=false
 SLACK_WEBHOOK_URL=
 
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=admin
+
 REMOTEOK_API_URL=https://remoteok.com/api
 REMOTEOK_CRAWL_LIMIT=50
 REMOTEOK_SCAN_LIMIT=1000
@@ -1620,7 +1814,9 @@ docker compose up -d --no-build --force-recreate \
   airflow-triggerer \
   mlflow \
   api \
-  dashboard
+  dashboard \
+  prometheus \
+  grafana
 ```
 
 ### 9. 컨테이너 상태 확인
@@ -1650,6 +1846,9 @@ make dag-tasks
 make dag-trigger
 make report
 make dashboard
+make metrics
+make prometheus
+make grafana
 make api-sample
 make notify
 make drift-check
@@ -1704,6 +1903,24 @@ make drift-check
 make cleanup
 ```
 
+`make metrics`는 FastAPI `/metrics`에서 노출되는 Prometheus format 지표를 확인합니다.
+
+```bash
+make metrics
+```
+
+`make prometheus`는 Prometheus를 실행하고 FastAPI `/metrics`를 scrape합니다.
+
+```bash
+make prometheus
+```
+
+`make grafana`는 Grafana를 실행하고 Prometheus datasource와 JobSkill dashboard를 자동 provisioning합니다.
+
+```bash
+make grafana
+```
+
 ## 접속 정보
 
 ### Airflow UI
@@ -1736,6 +1953,18 @@ http://localhost:8000/docs
 
 ```text
 http://localhost:8501
+```
+
+### Prometheus
+
+```text
+http://localhost:9090
+```
+
+### Grafana
+
+```text
+http://localhost:3000
 ```
 
 
@@ -1911,9 +2140,13 @@ Airflow pipeline task list
 MLflow UI
 FastAPI health
 FastAPI model info
+FastAPI metrics
+FastAPI metrics content
 FastAPI sample prediction requests
 api_prediction_logs 저장 확인
 model_predictions API row 저장 확인
+Prometheus UI / target 확인
+Grafana health
 Streamlit dashboard
 ```
 
@@ -1926,7 +2159,10 @@ PostgreSQL 실행
 → Airflow / MLflow 실행
 → sample_only 기반 최소 파이프라인 실행
 → promoted model 생성 확인
-→ API / Dashboard 실행
+→ API / Dashboard / Prometheus / Grafana 실행
+→ FastAPI metrics endpoint 확인
+→ Prometheus scrape target 확인
+→ Grafana health 확인
 → FastAPI sample prediction request 실행
 → api_prediction_logs / API prediction row 저장 확인
 → smoke_check.sh 실행
@@ -1999,6 +2235,7 @@ http://localhost:8000/docs
 ```text
 GET  /
 GET  /model
+GET  /metrics
 POST /reload-model
 POST /predict
 ```
@@ -2447,13 +2684,16 @@ Airflow metadata DB init
 Airflow / MLflow start
 sample_only minimal pipeline run
 promoted model existence check
-FastAPI / Dashboard start
+FastAPI / Dashboard / Prometheus / Grafana start
+FastAPI metrics validation
+Prometheus target validation
+Grafana health validation
 Sample API prediction request run
 api_prediction_logs and API prediction rows validation
 scripts/smoke_check.sh run
 ```
 
-GitHub Actions의 빈 runner에서는 promoted model이 존재하지 않으므로, API를 시작하기 전에 최소 파이프라인을 먼저 실행해 `models/best/job_classifier.pkl`과 `model_registry`의 promoted model을 생성합니다. 이후 sample API request를 실행해 API 예측 결과와 요청 로그가 DB에 저장되는지도 함께 검증합니다.
+GitHub Actions의 빈 runner에서는 promoted model이 존재하지 않으므로, API를 시작하기 전에 최소 파이프라인을 먼저 실행해 `models/best/job_classifier.pkl`과 `model_registry`의 promoted model을 생성합니다. 이후 `/metrics`, Prometheus target, Grafana health, sample API request를 확인해 운영 지표 노출/수집/시각화 경로와 API 예측 결과 저장까지 함께 검증합니다.
 
 ## Release / Changelog
 
@@ -2484,6 +2724,9 @@ Sample API request validation
 Pipeline Notification
 Prediction drift gate
 Retention cleanup script
+FastAPI /metrics endpoint
+Prometheus scrape 구성
+Grafana dashboard provisioning
 ```
 
 태그 생성 예시:
@@ -3450,6 +3693,138 @@ curl http://localhost:8000/model
 ```
 
 
+
+### 29. curl /metrics 확인 시 Failed writing body가 나오는 경우
+
+증상:
+
+```text
+curl: Failed writing body
+```
+
+원인:
+
+```text
+curl http://localhost:8000/metrics | head -50 처럼 사용할 때
+head가 먼저 종료되면서 curl이 나머지 출력 쓰기에 실패해 발생하는 메시지
+```
+
+해결:
+
+```bash
+curl -fsS http://localhost:8000/metrics -o /tmp/jobskill_metrics.txt
+head -50 /tmp/jobskill_metrics.txt
+```
+
+또는 진행률 표시 없이 확인합니다.
+
+```bash
+curl -s http://localhost:8000/metrics | head -50
+```
+
+### 30. Prometheus target이 DOWN인 경우
+
+증상:
+
+```text
+Prometheus /targets에서 jobskill-api가 DOWN으로 표시됨
+```
+
+확인:
+
+```bash
+docker compose ps api prometheus
+curl -fsS http://localhost:8000/metrics | head
+make prometheus-logs
+```
+
+원인:
+
+```text
+api 컨테이너가 기동되지 않았거나
+Prometheus 설정의 target이 Docker Compose 내부 서비스명 기준이 아님
+```
+
+정상 설정:
+
+```yaml
+scrape_configs:
+  - job_name: "jobskill-api"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets:
+          - "api:8000"
+```
+
+Docker Compose 내부에서는 `localhost:8000`이 아니라 `api:8000`을 사용해야 합니다.
+
+### 31. Grafana dashboard가 보이지 않는 경우
+
+증상:
+
+```text
+Grafana에는 접속되지만 JobSkill MLOps Overview dashboard가 보이지 않음
+```
+
+확인:
+
+```bash
+docker compose ps grafana
+make grafana-logs
+```
+
+확인할 파일:
+
+```text
+monitoring/grafana/provisioning/datasources/prometheus.yml
+monitoring/grafana/provisioning/dashboards/dashboard.yml
+monitoring/grafana/dashboards/jobskill-mlops-overview.json
+```
+
+Grafana 컨테이너에 provisioning 파일이 정상 mount되어야 합니다.
+
+```yaml
+volumes:
+  - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+  - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+```
+
+### 32. docker-compose.yml에서 prometheus/grafana 추가 후 mapping key 중복 오류
+
+증상:
+
+```text
+yaml: unmarshal errors:
+  mapping key "image" already defined
+  mapping key "container_name" already defined
+```
+
+원인:
+
+```text
+prometheus 또는 grafana 서비스가 api/dashboard 같은 다른 서비스 내부에 잘못 들여쓰기됨
+```
+
+정상 구조:
+
+```yaml
+services:
+  api:
+    image: ...
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+
+  grafana:
+    image: grafana/grafana:11.3.0
+```
+
+검증:
+
+```bash
+docker compose config
+```
+
 ## What I Learned
 
 이 프로젝트를 통해 아래 내용을 실습했습니다.
@@ -3501,6 +3876,10 @@ prediction distribution drift check를 통한 예측 분포 변화 감지 구성
 PSI 기반 label/prediction distribution 비교 로직 구성
 retention cleanup을 통한 API 로그/예측/검증 결과 보관 정책 구성
 dry-run 기반 안전한 운영 유지보수 스크립트 구성
+FastAPI /metrics 기반 Prometheus text format 운영 지표 노출 구성
+Prometheus scrape config를 통한 JobSkill API metrics 수집 구성
+Grafana datasource/dashboard provisioning 구성
+Grafana 기반 MLOps 운영 지표 시각화 구성
 ```
 
 ## 현재 완료된 범위
@@ -3578,6 +3957,15 @@ prediction distribution drift gate 추가
 PREDICTION_DRIFT 결과 저장 추가
 Airflow DAG에 check_prediction_drift task 추가
 Makefile cleanup / drift-check 명령어 추가
+src/monitoring/prometheus_metrics.py 추가
+FastAPI /metrics 엔드포인트 추가
+Prometheus Docker Compose 서비스 추가
+monitoring/prometheus/prometheus.yml 추가
+Grafana Docker Compose 서비스 추가
+Grafana datasource / dashboard provisioning 추가
+Grafana dashboard 스크린샷 docs/images/grafana.png 추가
+Makefile metrics / prometheus / grafana 명령어 추가
+smoke check에 metrics / Prometheus / Grafana 검증 추가
 ```
 
 ## 다음 개선 예정
@@ -3594,5 +3982,7 @@ cleanup 결과를 pipeline report 또는 notification에 포함
 GitHub Actions smoke workflow 실행 시간 최적화
 GitHub Actions smoke workflow를 workflow_dispatch 전용으로 전환할지 검토
 Streamlit Dashboard 필터 / 기간 조건 / 상세 drill-down 추가
-API 요청 로그 기반 모니터링 지표 고도화
+Prometheus alert rule 추가
+Grafana dashboard panel 고도화
+Grafana screenshot 최신화 자동화 검토
 ```

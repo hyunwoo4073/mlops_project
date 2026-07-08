@@ -1,7 +1,7 @@
 .PHONY: help build up down restart ps logs \
         db-init airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        test test-container lint ci smoke notify api-sample cleanup drift-check \
+        test test-container lint ci smoke notify api-sample cleanup drift-check metrics prometheus prometheus-logs grafana grafana-logs \
         report dashboard dashboard-logs \
         api api-logs mlflow-logs \
         psql clean-runtime
@@ -45,6 +45,11 @@ help:
 	@echo "  make api               Start FastAPI"
 	@echo "  make api-logs          Show FastAPI logs"
 	@echo "  make api-sample        Send sample prediction requests to FastAPI"
+	@echo "  make metrics           Show FastAPI Prometheus metrics"
+	@echo "  make prometheus        Start Prometheus"
+	@echo "  make prometheus-logs   Show Prometheus logs"
+	@echo "  make grafana           Start Grafana"
+	@echo "  make grafana-logs      Show Grafana logs"
 	@echo ""
 	@echo "Notification"
 	@echo "  make notify            Send or print pipeline status notification"
@@ -64,7 +69,9 @@ up:
 		airflow-triggerer \
 		mlflow \
 		api \
-		dashboard
+		dashboard \
+		prometheus \
+		grafana
 
 down:
 	docker compose down
@@ -77,7 +84,9 @@ restart:
 		airflow-triggerer \
 		mlflow \
 		api \
-		dashboard
+		dashboard \
+		prometheus \
+		grafana
 
 ps:
 	docker compose ps
@@ -158,3 +167,18 @@ cleanup:
 
 drift-check:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_prediction_drift.py"
+
+metrics:
+	curl -s http://localhost:8000/metrics | head -80
+
+prometheus:
+	docker compose up -d prometheus
+
+prometheus-logs:
+	docker compose logs --tail=100 prometheus
+
+grafana:
+	docker compose up -d grafana
+
+grafana-logs:
+	docker compose logs --tail=100 grafana
