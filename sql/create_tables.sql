@@ -254,3 +254,42 @@ ON alert_events(service);
 
 CREATE INDEX IF NOT EXISTS idx_alert_events_created_at
 ON alert_events(created_at);
+
+CREATE TABLE IF NOT EXISTS alert_current_states (
+    id BIGSERIAL PRIMARY KEY,
+
+    fingerprint VARCHAR(200) NOT NULL UNIQUE,
+
+    status VARCHAR(30) NOT NULL,
+    alert_name VARCHAR(200),
+    severity VARCHAR(50),
+    service VARCHAR(100),
+    instance VARCHAR(200),
+
+    starts_at TIMESTAMP,
+    ends_at TIMESTAMP,
+    last_received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    summary TEXT,
+    description TEXT,
+
+    labels JSONB,
+    annotations JSONB,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_current_states_status
+ON alert_current_states(status);
+
+CREATE INDEX IF NOT EXISTS idx_alert_current_states_alert_name
+ON alert_current_states(alert_name);
+
+CREATE INDEX IF NOT EXISTS idx_alert_current_states_severity
+ON alert_current_states(severity);
+
+CREATE INDEX IF NOT EXISTS idx_alert_current_states_service
+ON alert_current_states(service);
+
+CREATE INDEX IF NOT EXISTS idx_alert_current_states_updated_at
+ON alert_current_states(updated_at);

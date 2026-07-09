@@ -201,6 +201,46 @@ def build_metrics_text() -> str:
             )
         ).mappings().first()
 
+        alert_event_rows = conn.execute(
+            text(
+                """
+                SELECT
+                    COALESCE(alert_name, 'unknown') AS alert_name,
+                    COALESCE(severity, 'unknown') AS severity,
+                    COALESCE(service, 'unknown') AS service,
+                    status,
+                    COUNT(*) AS count
+                FROM alert_events
+                GROUP BY
+                    COALESCE(alert_name, 'unknown'),
+                    COALESCE(severity, 'unknown'),
+                    COALESCE(service, 'unknown'),
+                    status
+                ORDER BY alert_name, severity, service, status
+                """
+            )
+        ).mappings().all()
+
+        alert_current_state_rows = conn.execute(
+            text(
+                """
+                SELECT
+                    COALESCE(alert_name, 'unknown') AS alert_name,
+                    COALESCE(severity, 'unknown') AS severity,
+                    COALESCE(service, 'unknown') AS service,
+                    status,
+                    COUNT(*) AS count
+                FROM alert_current_states
+                GROUP BY
+                    COALESCE(alert_name, 'unknown'),
+                    COALESCE(severity, 'unknown'),
+                    COALESCE(service, 'unknown'),
+                    status
+                ORDER BY alert_name, severity, service, status
+                """
+            )
+        ).mappings().all()
+
     _add_metric(
         lines=lines,
         name="jobskill_raw_job_posts_total",
@@ -365,6 +405,44 @@ def build_metrics_text() -> str:
                 int(row["count"]),
             )
             for row in recent_failed_check_rows
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_events_total",
+        metric_type="gauge",
+        help_text="Total alert events by alert name, severity, service and status.",
+        values=[
+            (
+                {
+                    "alert_name": row["alert_name"],
+                    "severity": row["severity"],
+                    "service": row["service"],
+                    "status": row["status"],
+                },
+                int(row["count"]),
+            )
+            for row in alert_event_rows
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_current_states_total",
+        metric_type="gauge",
+        help_text="Current alert states by alert name, severity, service and status.",
+        values=[
+            (
+                {
+                    "alert_name": row["alert_name"],
+                    "severity": row["severity"],
+                    "service": row["service"],
+                    "status": row["status"],
+                },
+                int(row["count"]),
+            )
+            for row in alert_current_state_rows
         ],
     )
 
