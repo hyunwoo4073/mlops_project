@@ -213,3 +213,44 @@ WHERE prediction_source IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_model_predictions_prediction_source
 ON model_predictions(prediction_source);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+    id BIGSERIAL PRIMARY KEY,
+
+    receiver VARCHAR(100),
+    status VARCHAR(30) NOT NULL,
+
+    alert_name VARCHAR(200),
+    severity VARCHAR(50),
+    service VARCHAR(100),
+    instance VARCHAR(200),
+    fingerprint VARCHAR(200),
+
+    starts_at TIMESTAMP,
+    ends_at TIMESTAMP,
+    generator_url TEXT,
+
+    summary TEXT,
+    description TEXT,
+
+    labels JSONB,
+    annotations JSONB,
+    raw_payload JSONB,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_status
+ON alert_events(status);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_alert_name
+ON alert_events(alert_name);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_severity
+ON alert_events(severity);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_service
+ON alert_events(service);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_created_at
+ON alert_events(created_at);

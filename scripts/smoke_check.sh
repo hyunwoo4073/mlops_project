@@ -193,6 +193,47 @@ check_command \
   "curl -fsS 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22jobskill-api%22%7D' | grep -q '\"value\"'"
 
 check_http \
+  "Alertmanager health" \
+  "http://localhost:9093/-/ready"
+
+check_command \
+  "Alertmanager webhook endpoint" \
+  "curl -fsS -X POST 'http://localhost:8000/alertmanager/webhook' \
+    -H 'Content-Type: application/json' \
+    -d '{
+      \"receiver\": \"smoke-test\",
+      \"status\": \"firing\",
+      \"alerts\": [
+        {
+          \"status\": \"firing\",
+          \"labels\": {
+            \"alertname\": \"SmokeTestAlert\",
+            \"severity\": \"info\",
+            \"service\": \"smoke-test\"
+          },
+          \"annotations\": {
+            \"summary\": \"Smoke test alert\",
+            \"description\": \"Smoke test alertmanager webhook event.\"
+          },
+          \"startsAt\": \"2026-07-09T00:00:00Z\",
+          \"endsAt\": \"0001-01-01T00:00:00Z\",
+          \"generatorURL\": \"http://localhost:9090/graph\",
+          \"fingerprint\": \"smoke-test-fingerprint\"
+        }
+      ]
+    }' | grep -q 'inserted_alert_events'"
+
+check_command \
+  "Alert events table" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM alert_events;
+  \" | grep -q OK"
+
+check_http \
   "Grafana health" \
   "http://localhost:3000/api/health"
 

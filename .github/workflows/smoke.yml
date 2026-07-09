@@ -157,20 +157,22 @@ jobs:
             LIMIT 5;
           "
 
-      - name: Start API, Dashboard, Prometheus and Grafana
+      - name: Start API, Dashboard, Alertmanager, Prometheus and Grafana
         run: |
           docker compose up -d --no-build \
             api \
             dashboard \
+            alertmanager \
             prometheus \
             grafana
 
-      - name: Wait for API, Dashboard, Prometheus and Grafana
+      - name: Wait for API, Dashboard, Alertmanager, Prometheus and Grafana
         run: |
           sleep 30
           docker compose ps
           docker compose logs --tail=100 api
           docker compose logs --tail=100 dashboard
+          docker compose logs --tail=100 alertmanager
           docker compose logs --tail=100 prometheus
           docker compose logs --tail=100 grafana
 
