@@ -3,7 +3,7 @@
   "title": "JobSkill MLOps Overview",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "tags": ["jobskill", "mlops", "prometheus"],
   "panels": [
@@ -256,6 +256,114 @@
         "w": 12,
         "x": 12,
         "y": 20
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Total Alert Events",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(jobskill_alert_events_total)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 28
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Firing Alert Events",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(jobskill_alert_events_total{status=\"firing\"})",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 28
+      }
+    },
+    {
+      "id": 13,
+      "type": "barchart",
+      "title": "Alert Events by Status",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (jobskill_alert_events_total)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      }
+    },
+    {
+      "id": 14,
+      "type": "barchart",
+      "title": "Alert Events by Severity",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (severity) (jobskill_alert_events_total)",
+          "legendFormat": "{{severity}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      }
+    },
+    {
+      "id": 15,
+      "type": "barchart",
+      "title": "Alert Events by Alert Name",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (alert_name, status) (jobskill_alert_events_total)",
+          "legendFormat": "{{alert_name}} - {{status}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
       }
     }
   ]

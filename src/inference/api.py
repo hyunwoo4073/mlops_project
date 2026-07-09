@@ -253,6 +253,73 @@ def receive_alertmanager_webhook(payload: AlertmanagerWebhookPayload):
             )
             inserted_count += 1
 
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO alert_current_states (
+                        fingerprint,
+                        status,
+                        alert_name,
+                        severity,
+                        service,
+                        instance,
+                        starts_at,
+                        ends_at,
+                        last_received_at,
+                        summary,
+                        description,
+                        labels,
+                        annotations,
+                        updated_at
+                    )
+                    VALUES (
+                        :fingerprint,
+                        :status,
+                        :alert_name,
+                        :severity,
+                        :service,
+                        :instance,
+                        :starts_at,
+                        :ends_at,
+                        CURRENT_TIMESTAMP,
+                        :summary,
+                        :description,
+                        CAST(:labels AS jsonb),
+                        CAST(:annotations AS jsonb),
+                        CURRENT_TIMESTAMP
+                    )
+                    ON CONFLICT (fingerprint)
+                    DO UPDATE SET
+                        status = EXCLUDED.status,
+                        alert_name = EXCLUDED.alert_name,
+                        severity = EXCLUDED.severity,
+                        service = EXCLUDED.service,
+                        instance = EXCLUDED.instance,
+                        starts_at = EXCLUDED.starts_at,
+                        ends_at = EXCLUDED.ends_at,
+                        last_received_at = CURRENT_TIMESTAMP,
+                        summary = EXCLUDED.summary,
+                        description = EXCLUDED.description,
+                        labels = EXCLUDED.labels,
+                        annotations = EXCLUDED.annotations,
+                        updated_at = CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    "fingerprint": alert.fingerprint,
+                    "status": alert.status,
+                    "alert_name": labels.get("alertname"),
+                    "severity": labels.get("severity"),
+                    "service": labels.get("service"),
+                    "instance": labels.get("instance"),
+                    "starts_at": parse_alertmanager_timestamp(alert.startsAt),
+                    "ends_at": parse_alertmanager_timestamp(alert.endsAt),
+                    "summary": annotations.get("summary"),
+                    "description": annotations.get("description"),
+                    "labels": json.dumps(labels, ensure_ascii=False),
+                    "annotations": json.dumps(annotations, ensure_ascii=False),
+                },
+            )
     return {
         "status": "ok",
         "inserted_alert_events": inserted_count,

@@ -1,15 +1,10 @@
 import os
-import sys
-from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from sqlalchemy import create_engine, text
 
-
-# 프로젝트 루트를 import path에 추가
-sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 
 def get_database_url() -> str:
@@ -331,6 +326,201 @@ def render_recent_predictions():
 
     st.dataframe(df, use_container_width=True)
 
+def fetch_alert_summary() -> pd.DataFrame:
+    engine = get_engine()
+
+    query = text(
+        """
+        SELECT
+            COALESCE(alert_name, 'unknown') AS alert_name,
+            COALESCE(severity, 'unknown') AS severity,
+            COALESCE(service, 'unknown') AS service,
+            status,
+            COUNT(*) AS alert_count,
+            MAX(created_at) AS latest_created_at
+        FROM alert_events
+        GROUP BY
+            COALESCE(alert_name, 'unknown'),
+            COALESCE(severity, 'unknown'),
+            COALESCE(service, 'unknown'),
+            status
+        ORDER BY latest_created_at DESC
+        """
+    )
+
+    with engine.begin() as conn:
+        return pd.read_sql(query, conn)
+
+
+def fetch_recent_alert_events(limit: int = 50) -> pd.DataFrame:
+    engine = get_engine()
+
+    query = text(
+        """
+        SELECT
+            id,
+            status,
+            alert_name,
+            severity,
+            service,
+            instance,
+            summary,
+            description,
+            starts_at,
+            ends_at,
+            created_at
+        FROM alert_events
+        ORDER BY id DESC
+        LIMIT :limit
+        """
+    )
+
+    with engine.begin() as conn:
+        return pd.read_sql(query, conn, params={"limit": limit})
+
+
+def fetch_alert_status_counts() -> pd.DataFrame:
+    engine = get_engine()
+
+    query = text(
+        """
+        SELECT
+            status,
+            COUNT(*) AS count
+        FROM alert_events
+        GROUP BY status
+        ORDER BY status
+        """
+    )
+
+    with engine.begin() as conn:
+        return pd.read_sql(query, conn)
+
+
+def fetch_alert_severity_counts() -> pd.DataFrame:
+    engine = get_engine()
+
+    query = text(
+        """
+        SELECT
+            COALESCE(severity, 'unknown') AS severity,
+            COUNT(*) AS count
+        FROM alert_events
+        GROUP BY COALESCE(severity, 'unknown')
+        ORDER BY count DESC
+        """
+    )
+
+    with engine.begin() as conn:
+        return pd.read_sql(query, conn)
+
+
+def fetch_recent_firing_alerts() -> pd.DataFrame:
+    engine = get_engine()
+
+    query = text(
+        """
+        SELECT
+            alert_name,
+            severity,
+            service,
+            summary,
+            created_at
+        FROM alert_events
+        WHERE status = 'firing'
+        ORDER BY id DESC
+        LIMIT 10
+        """
+    )
+
+    with engine.begin() as conn:
+        return pd.read_sql(query, conn)
+
+def render_alert_history_section() -> None:
+    st.header("Alert History")
+
+    alert_summary_df = fetch_alert_summary()
+    recent_alerts_df = fetch_recent_alert_events()
+    status_counts_df = fetch_alert_status_counts()
+    severity_counts_df = fetch_alert_severity_counts()
+    recent_firing_df = fetch_recent_firing_alerts()
+
+    if alert_summary_df.empty:
+        st.info("No alert events found.")
+        return
+
+    total_alert_count = int(alert_summary_df["alert_count"].sum())
+    firing_count = int(
+        alert_summary_df.loc[
+            alert_summary_df["status"].str.lower() == "firing",
+            "alert_count",
+        ].sum()
+    )
+    resolved_count = int(
+        alert_summary_df.loc[
+            alert_summary_df["status"].str.lower() == "resolved",
+            "alert_count",
+        ].sum()
+    )
+    latest_created_at = alert_summary_df["latest_created_at"].max()
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Total Alert Events", total_alert_count)
+    col2.metric("Firing Events", firing_count)
+    col3.metric("Resolved Events", resolved_count)
+    col4.metric("Latest Alert Event", str(latest_created_at))
+
+    st.subheader("Alert Status Distribution")
+
+    if not status_counts_df.empty:
+        fig = px.bar(
+            status_counts_df,
+            x="status",
+            y="count",
+            text="count",
+            title="Alert Events by Status",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Alert Severity Distribution")
+
+    if not severity_counts_df.empty:
+        fig = px.bar(
+            severity_counts_df,
+            x="severity",
+            y="count",
+            text="count",
+            title="Alert Events by Severity",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Recent Firing Alerts")
+
+    if recent_firing_df.empty:
+        st.success("No recent firing alerts.")
+    else:
+        st.dataframe(
+            recent_firing_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("Alert Summary")
+
+    st.dataframe(
+        alert_summary_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Recent Alert Events")
+
+    st.dataframe(
+        recent_alerts_df,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 def main():
     st.set_page_config(
@@ -347,13 +537,14 @@ def main():
 
     render_metric_cards()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
         [
             "Model",
             "Data Quality",
             "Prediction Quality",
             "Pipeline Checks",
             "API Logs",
+            "Alert History",
             "Recent Predictions",
         ]
     )
@@ -374,6 +565,9 @@ def main():
         render_api_logs()
 
     with tab6:
+        render_alert_history_section()
+
+    with tab7:
         render_recent_predictions()
 
 

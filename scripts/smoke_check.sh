@@ -233,6 +233,20 @@ check_command \
     FROM alert_events;
   \" | grep -q OK"
 
+check_command \
+  "Alert current states table" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM alert_current_states;
+  \" | grep -q OK"
+
+check_command \
+  "Alert current state metrics" \
+  "curl -fsS http://localhost:8000/metrics | grep -q jobskill_alert_current_states_total"
+
 check_http \
   "Grafana health" \
   "http://localhost:3000/api/health"
