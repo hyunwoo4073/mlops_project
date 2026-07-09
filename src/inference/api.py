@@ -22,12 +22,48 @@ from src.common.prediction_quality import build_prediction_quality
 from src.preprocessing.clean_text import clean_text
 from src.preprocessing.extract_skills import extract_skills
 
+from datetime import datetime
+from typing import Any
+
+
 
 app = FastAPI(title="JobSkill MLOps API")
 
 engine = get_engine()
 
 PREDICTION_SOURCE_API = "API"
+
+class AlertmanagerAlert(BaseModel):
+    status: str
+    labels: dict[str, Any] = Field(default_factory=dict)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+    startsAt: str | None = None
+    endsAt: str | None = None
+    generatorURL: str | None = None
+    fingerprint: str | None = None
+
+
+class AlertmanagerWebhookPayload(BaseModel):
+    receiver: str | None = None
+    status: str
+    alerts: list[AlertmanagerAlert] = Field(default_factory=list)
+    groupLabels: dict[str, Any] = Field(default_factory=dict)
+    commonLabels: dict[str, Any] = Field(default_factory=dict)
+    commonAnnotations: dict[str, Any] = Field(default_factory=dict)
+    externalURL: str | None = None
+    version: str | None = None
+    groupKey: str | None = None
+    truncatedAlerts: int | None = None
+
+
+def parse_alertmanager_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 class ModelStore:
@@ -146,6 +182,81 @@ def metrics():
         content=build_metrics_text(),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
+@app.post("/alertmanager/webhook")
+def receive_alertmanager_webhook(payload: AlertmanagerWebhookPayload):
+    engine = get_engine()
+    inserted_count = 0
+    raw_payload = payload.model_dump(mode="json")
+
+    with engine.begin() as conn:
+        for alert in payload.alerts:
+            labels = alert.labels
+            annotations = alert.annotations
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO alert_events (
+                        receiver,
+                        status,
+                        alert_name,
+                        severity,
+                        service,
+                        instance,
+                        fingerprint,
+                        starts_at,
+                        ends_at,
+                        generator_url,
+                        summary,
+                        description,
+                        labels,
+                        annotations,
+                        raw_payload
+                    )
+                    VALUES (
+                        :receiver,
+                        :status,
+                        :alert_name,
+                        :severity,
+                        :service,
+                        :instance,
+                        :fingerprint,
+                        :starts_at,
+                        :ends_at,
+                        :generator_url,
+                        :summary,
+                        :description,
+                        CAST(:labels AS jsonb),
+                        CAST(:annotations AS jsonb),
+                        CAST(:raw_payload AS jsonb)
+                    )
+                    """
+                ),
+                {
+                    "receiver": payload.receiver,
+                    "status": alert.status,
+                    "alert_name": labels.get("alertname"),
+                    "severity": labels.get("severity"),
+                    "service": labels.get("service"),
+                    "instance": labels.get("instance"),
+                    "fingerprint": alert.fingerprint,
+                    "starts_at": parse_alertmanager_timestamp(alert.startsAt),
+                    "ends_at": parse_alertmanager_timestamp(alert.endsAt),
+                    "generator_url": alert.generatorURL,
+                    "summary": annotations.get("summary"),
+                    "description": annotations.get("description"),
+                    "labels": json.dumps(labels, ensure_ascii=False),
+                    "annotations": json.dumps(annotations, ensure_ascii=False),
+                    "raw_payload": json.dumps(raw_payload, ensure_ascii=False),
+                },
+            )
+            inserted_count += 1
+
+    return {
+        "status": "ok",
+        "inserted_alert_events": inserted_count,
+    }
 
 @app.post("/reload-model")
 def reload_model():

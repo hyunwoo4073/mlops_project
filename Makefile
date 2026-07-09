@@ -1,7 +1,9 @@
 .PHONY: help build up down restart ps logs \
         db-init airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        test test-container lint ci smoke notify api-sample cleanup drift-check metrics prometheus prometheus-logs grafana grafana-logs \
+        test test-container lint ci smoke notify api-sample cleanup drift-check metrics \
+        prometheus prometheus-logs prometheus-check alertmanager alertmanager-logs alertmanager-check \
+        grafana grafana-logs \
         report dashboard dashboard-logs \
         api api-logs mlflow-logs \
         psql clean-runtime
@@ -50,9 +52,13 @@ help:
 	@echo "  make prometheus-logs   Show Prometheus logs"
 	@echo "  make grafana           Start Grafana"
 	@echo "  make grafana-logs      Show Grafana logs"
+	@echo "  make prometheus-check  Validate Prometheus config and alert rules"
 	@echo ""
 	@echo "Notification"
 	@echo "  make notify            Send or print pipeline status notification"
+	@echo "  make alertmanager       Start Alertmanager"
+	@echo "  make alertmanager-logs  Show Alertmanager logs"
+	@echo "  make alertmanager-check Validate Alertmanager config"
 	@echo ""
 	@echo "Maintenance"
 	@echo "  make cleanup           Run cleanup retention script"
@@ -70,6 +76,7 @@ up:
 		mlflow \
 		api \
 		dashboard \
+		alertmanager \
 		prometheus \
 		grafana
 
@@ -85,6 +92,7 @@ restart:
 		mlflow \
 		api \
 		dashboard \
+		alertmanager \
 		prometheus \
 		grafana
 
@@ -182,3 +190,23 @@ grafana:
 
 grafana-logs:
 	docker compose logs --tail=100 grafana
+
+prometheus-check:
+	docker run --rm \
+		--entrypoint promtool \
+		-v "$$(pwd)/monitoring/prometheus:/etc/prometheus:ro" \
+		prom/prometheus:v2.55.1 \
+		check config /etc/prometheus/prometheus.yml
+
+alertmanager:
+	docker compose up -d alertmanager
+
+alertmanager-logs:
+	docker compose logs --tail=100 alertmanager
+
+alertmanager-check:
+	docker run --rm \
+		--entrypoint amtool \
+		-v "$$(pwd)/monitoring/alertmanager:/etc/alertmanager:ro" \
+		prom/alertmanager:v0.27.0 \
+		check-config /etc/alertmanager/alertmanager.yml
