@@ -282,7 +282,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "Firing Alert Events",
+      "title": "Historical Firing Alert Events",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -303,7 +303,7 @@
     {
       "id": 13,
       "type": "barchart",
-      "title": "Alert Events by Status",
+      "title": "Historical Alert Events by Status",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -325,7 +325,7 @@
     {
       "id": 14,
       "type": "barchart",
-      "title": "Alert Events by Severity",
+      "title": "Historical Alert Events by Severity",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -347,7 +347,7 @@
     {
       "id": 15,
       "type": "barchart",
-      "title": "Alert Events by Alert Name",
+      "title": "Historical Alert Events by Alert Name",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -364,6 +364,92 @@
         "w": 24,
         "x": 0,
         "y": 40
+      }
+    },
+        {
+      "id": 16,
+      "type": "stat",
+      "title": "Current Firing Alerts",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(jobskill_alert_current_states_total{status=\"firing\"})",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 48
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Current Alert States",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(jobskill_alert_current_states_total)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 48
+      }
+    },
+    {
+      "id": 18,
+      "type": "barchart",
+      "title": "Current Alerts by Status",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (jobskill_alert_current_states_total)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      }
+    },
+    {
+      "id": 19,
+      "type": "barchart",
+      "title": "Current Firing Alerts by Name",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (alert_name, severity) (jobskill_alert_current_states_total{status=\"firing\"})",
+          "legendFormat": "{{alert_name}} - {{severity}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 52
       }
     }
   ]
