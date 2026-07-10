@@ -73,3 +73,14 @@ groups:
         annotations:
           summary: "Latest promoted model weighted F1 is low"
           description: "Latest promoted model weighted F1 score is below 0.7."
+
+      - alert: JobSkillManualSlackTest
+        expr: vector(1)
+        for: 10s
+        labels:
+          severity: warning
+          service: slack-test
+        annotations:
+          summary: "Manual Slack test alert"
+          description: "This alert is used to test Alertmanager Slack notification."
+      

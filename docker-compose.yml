@@ -233,6 +233,7 @@ services:
       - "9093:9093"
     volumes:
       - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./.secrets/slack_webhook_url:/etc/alertmanager/secrets/slack_webhook_url:ro
       - alertmanager-data:/alertmanager
     depends_on:
       api:

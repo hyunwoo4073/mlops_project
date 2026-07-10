@@ -2,7 +2,7 @@ global:
   resolve_timeout: 5m
 
 route:
-  receiver: "jobskill-webhook"
+  receiver: "jobskill-webhook-and-slack"
   group_by:
     - alertname
     - service
@@ -12,7 +12,24 @@ route:
   repeat_interval: 1h
 
 receivers:
-  - name: "jobskill-webhook"
+  - name: "jobskill-webhook-and-slack"
     webhook_configs:
       - url: "http://api:8000/alertmanager/webhook"
         send_resolved: true
+
+    slack_configs:
+      - api_url_file: "/etc/alertmanager/secrets/slack_webhook_url"
+        send_resolved: true
+        title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+        text: |
+          *Service:* {{ .CommonLabels.service }}
+          *Severity:* {{ .CommonLabels.severity }}
+          *Status:* {{ .Status }}
+
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Instance:* {{ .Labels.instance }}
+          *Starts At:* {{ .StartsAt }}
+          *Ends At:* {{ .EndsAt }}
+          {{ end }}

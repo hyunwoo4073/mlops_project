@@ -72,3 +72,4 @@ airflow_logs/
 
 reports/
 !reports/.gitkeep
+.secrets/

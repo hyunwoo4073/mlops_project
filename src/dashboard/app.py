@@ -48,17 +48,23 @@ def render_metric_cards():
         SELECT 'model_registry' AS table_name, COUNT(*) AS row_count FROM model_registry
         UNION ALL
         SELECT 'api_prediction_logs' AS table_name, COUNT(*) AS row_count FROM api_prediction_logs
+        UNION ALL
+        SELECT 'alert_events' AS table_name, COUNT(*) AS row_count FROM alert_events
+        UNION ALL
+        SELECT 'alert_current_states' AS table_name, COUNT(*) AS row_count FROM alert_current_states
         """
     )
 
     count_map = dict(zip(counts_df["table_name"], counts_df["row_count"]))
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     col1.metric("Raw jobs", int(count_map.get("raw_job_posts", 0)))
     col2.metric("Cleaned jobs", int(count_map.get("cleaned_job_posts", 0)))
     col3.metric("Predictions", int(count_map.get("model_predictions", 0)))
     col4.metric("API logs", int(count_map.get("api_prediction_logs", 0)))
+    col5.metric("Alert events", int(count_map.get("alert_events", 0)))
+    col6.metric("Current alerts", int(count_map.get("alert_current_states", 0)))
 
 
 def render_latest_model():
@@ -326,6 +332,7 @@ def render_recent_predictions():
 
     st.dataframe(df, use_container_width=True)
 
+
 def fetch_alert_summary() -> pd.DataFrame:
     engine = get_engine()
 
@@ -351,6 +358,30 @@ def fetch_alert_summary() -> pd.DataFrame:
     with engine.begin() as conn:
         return pd.read_sql(query, conn)
 
+def fetch_current_alert_states() -> pd.DataFrame:
+    return read_sql(
+        """
+        SELECT
+            status,
+            alert_name,
+            severity,
+            service,
+            instance,
+            summary,
+            description,
+            starts_at,
+            ends_at,
+            last_received_at,
+            updated_at
+        FROM alert_current_states
+        ORDER BY
+            CASE
+                WHEN status = 'firing' THEN 0
+                ELSE 1
+            END,
+            updated_at DESC
+        """
+    )
 
 def fetch_recent_alert_events(limit: int = 50) -> pd.DataFrame:
     engine = get_engine()
@@ -415,26 +446,55 @@ def fetch_alert_severity_counts() -> pd.DataFrame:
         return pd.read_sql(query, conn)
 
 
-def fetch_recent_firing_alerts() -> pd.DataFrame:
-    engine = get_engine()
+def render_current_alerts_section() -> None:
+    st.header("Current Alerts")
 
-    query = text(
-        """
-        SELECT
-            alert_name,
-            severity,
-            service,
-            summary,
-            created_at
-        FROM alert_events
-        WHERE status = 'firing'
-        ORDER BY id DESC
-        LIMIT 10
-        """
+    df = fetch_current_alert_states()
+
+    if df.empty:
+        st.success("No current alert states found.")
+        return
+
+    firing_df = df[df["status"].str.lower() == "firing"]
+    resolved_df = df[df["status"].str.lower() == "resolved"]
+
+    warning_count = int(
+        firing_df[firing_df["severity"].fillna("").str.lower() == "warning"].shape[0]
+    )
+    critical_count = int(
+        firing_df[firing_df["severity"].fillna("").str.lower() == "critical"].shape[0]
     )
 
-    with engine.begin() as conn:
-        return pd.read_sql(query, conn)
+    latest_updated_at = df["updated_at"].max()
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    col1.metric("Current Alert States", len(df))
+    col2.metric("Firing", len(firing_df))
+    col3.metric("Resolved", len(resolved_df))
+    col4.metric("Warning Firing", warning_count)
+    col5.metric("Critical Firing", critical_count)
+
+    st.caption(f"Latest updated at: {latest_updated_at}")
+
+    st.subheader("Firing Alerts")
+
+    if firing_df.empty:
+        st.success("No firing alerts.")
+    else:
+        st.dataframe(
+            firing_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("All Current Alert States")
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 def render_alert_history_section() -> None:
     st.header("Alert History")
@@ -443,20 +503,19 @@ def render_alert_history_section() -> None:
     recent_alerts_df = fetch_recent_alert_events()
     status_counts_df = fetch_alert_status_counts()
     severity_counts_df = fetch_alert_severity_counts()
-    recent_firing_df = fetch_recent_firing_alerts()
 
     if alert_summary_df.empty:
         st.info("No alert events found.")
         return
 
     total_alert_count = int(alert_summary_df["alert_count"].sum())
-    firing_count = int(
+    firing_event_count = int(
         alert_summary_df.loc[
             alert_summary_df["status"].str.lower() == "firing",
             "alert_count",
         ].sum()
     )
-    resolved_count = int(
+    resolved_event_count = int(
         alert_summary_df.loc[
             alert_summary_df["status"].str.lower() == "resolved",
             "alert_count",
@@ -467,11 +526,11 @@ def render_alert_history_section() -> None:
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Total Alert Events", total_alert_count)
-    col2.metric("Firing Events", firing_count)
-    col3.metric("Resolved Events", resolved_count)
-    col4.metric("Latest Alert Event", str(latest_created_at))
+    col2.metric("Firing Events", firing_event_count)
+    col3.metric("Resolved Events", resolved_event_count)
+    col4.metric("Latest Event", str(latest_created_at))
 
-    st.subheader("Alert Status Distribution")
+    st.subheader("Alert Event Status Distribution")
 
     if not status_counts_df.empty:
         fig = px.bar(
@@ -483,7 +542,7 @@ def render_alert_history_section() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Alert Severity Distribution")
+    st.subheader("Alert Event Severity Distribution")
 
     if not severity_counts_df.empty:
         fig = px.bar(
@@ -495,18 +554,7 @@ def render_alert_history_section() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Recent Firing Alerts")
-
-    if recent_firing_df.empty:
-        st.success("No recent firing alerts.")
-    else:
-        st.dataframe(
-            recent_firing_df,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    st.subheader("Alert Summary")
+    st.subheader("Alert Event Summary")
 
     st.dataframe(
         alert_summary_df,
@@ -514,7 +562,7 @@ def render_alert_history_section() -> None:
         hide_index=True,
     )
 
-    st.subheader("Recent Alert Events")
+    st.subheader("Recent Alert Event History")
 
     st.dataframe(
         recent_alerts_df,
@@ -537,13 +585,14 @@ def main():
 
     render_metric_cards()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
         [
             "Model",
             "Data Quality",
             "Prediction Quality",
             "Pipeline Checks",
             "API Logs",
+            "Current Alerts",
             "Alert History",
             "Recent Predictions",
         ]
@@ -565,11 +614,13 @@ def main():
         render_api_logs()
 
     with tab6:
-        render_alert_history_section()
+        render_current_alerts_section()
 
     with tab7:
-        render_recent_predictions()
+        render_alert_history_section()
 
+    with tab8:
+        render_recent_predictions()
 
 if __name__ == "__main__":
     main()
