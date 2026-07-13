@@ -4,13 +4,15 @@ import time
 from pathlib import Path
 from threading import Lock
 from typing import Any
+import os
 
 import joblib
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse, PlainTextResponse
+import markdown as markdown_lib
 from src.monitoring.prometheus_metrics import build_metrics_text
 
 # 프로젝트 루트를 import path에 추가
@@ -28,6 +30,9 @@ from typing import Any
 
 
 app = FastAPI(title="JobSkill MLOps API")
+
+DEFAULT_RUNBOOK_DIR = Path(__file__).resolve().parents[2] / "docs" / "runbooks"
+RUNBOOK_DIR = Path(os.getenv("RUNBOOK_DIR", str(DEFAULT_RUNBOOK_DIR))).resolve()
 
 engine = get_engine()
 
@@ -568,3 +573,203 @@ def predict(req: PredictRequest):
             status_code=500,
             detail=f"Prediction failed: {type(exc).__name__}: {exc}",
         )
+
+DEFAULT_RUNBOOK_DIR = Path(__file__).resolve().parents[2] / "docs" / "runbooks"
+RUNBOOK_DIR = Path(os.getenv("RUNBOOK_DIR", str(DEFAULT_RUNBOOK_DIR))).resolve()
+
+
+def get_runbook_path(filename: str) -> Path:
+    if Path(filename).name != filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid runbook filename.",
+        )
+
+    if not filename.endswith(".md"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only markdown runbooks are supported.",
+        )
+
+    runbook_path = (RUNBOOK_DIR / filename).resolve()
+
+    try:
+        runbook_path.relative_to(RUNBOOK_DIR)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid runbook path.",
+        ) from exc
+
+    if not runbook_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Runbook not found: {filename}",
+        )
+
+    return runbook_path
+
+
+@app.get("/runbooks")
+def list_runbooks():
+    if not RUNBOOK_DIR.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Runbook directory does not exist: {RUNBOOK_DIR}",
+        )
+
+    runbooks = sorted(RUNBOOK_DIR.glob("*.md"))
+
+    return {
+        "runbook_dir": str(RUNBOOK_DIR),
+        "runbooks": [
+            {
+                "filename": runbook.name,
+                "url": f"/runbooks/{runbook.name}",
+                "raw_url": f"/runbooks/{runbook.name}/raw",
+            }
+            for runbook in runbooks
+        ],
+    }
+
+
+@app.get("/runbooks/{filename}", response_class=HTMLResponse)
+def get_runbook(filename: str):
+    runbook_path = get_runbook_path(filename)
+    markdown_text = runbook_path.read_text(encoding="utf-8")
+
+    rendered_body = markdown_lib.markdown(
+        markdown_text,
+        extensions=[
+            "fenced_code",
+            "tables",
+            "toc",
+        ],
+    )
+
+    html = f"""
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>{filename}</title>
+  <style>
+    body {{
+      max-width: 960px;
+      margin: 40px auto;
+      padding: 0 24px 64px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.7;
+      color: #1f2937;
+      background: #f9fafb;
+    }}
+
+    .container {{
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 32px 40px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }}
+
+    h1 {{
+      margin-top: 0;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #e5e7eb;
+      color: #111827;
+    }}
+
+    h2 {{
+      margin-top: 36px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #e5e7eb;
+      color: #111827;
+    }}
+
+    p {{
+      margin: 12px 0;
+    }}
+
+    ul {{
+      padding-left: 24px;
+    }}
+
+    li {{
+      margin: 6px 0;
+    }}
+
+    code {{
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: #f3f4f6;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.92em;
+    }}
+
+    pre {{
+      overflow-x: auto;
+      padding: 16px;
+      border-radius: 12px;
+      background: #111827;
+      color: #f9fafb;
+      line-height: 1.5;
+    }}
+
+    pre code {{
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }}
+
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+    }}
+
+    th, td {{
+      border: 1px solid #e5e7eb;
+      padding: 10px 12px;
+      text-align: left;
+    }}
+
+    th {{
+      background: #f3f4f6;
+    }}
+
+    a {{
+      color: #2563eb;
+      text-decoration: none;
+    }}
+
+    a:hover {{
+      text-decoration: underline;
+    }}
+
+    .meta {{
+      margin-bottom: 24px;
+      font-size: 14px;
+      color: #6b7280;
+    }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="meta">Runbook: {filename}</div>
+    {rendered_body}
+  </div>
+</body>
+</html>
+"""
+
+    return HTMLResponse(content=html)
+
+
+@app.get("/runbooks/{filename}/raw", response_class=PlainTextResponse)
+def get_runbook_raw(filename: str):
+    runbook_path = get_runbook_path(filename)
+
+    return PlainTextResponse(
+        runbook_path.read_text(encoding="utf-8"),
+        media_type="text/markdown; charset=utf-8",
+    )

@@ -369,6 +369,40 @@ def fetch_current_alert_states() -> pd.DataFrame:
             instance,
             summary,
             description,
+
+            COALESCE(
+                annotations ->> 'runbook_url',
+                CASE
+                    WHEN alert_name = 'JobSkillApiMetricsDown'
+                        THEN 'http://localhost:8000/runbooks/jobskill_api_metrics_down.md'
+                    WHEN alert_name IN (
+                        'JobSkillApiHighLowConfidenceRatio',
+                        'JobSkillBatchHighLowConfidenceRatio'
+                    )
+                        THEN 'http://localhost:8000/runbooks/jobskill_high_low_confidence_ratio.md'
+                    WHEN alert_name = 'JobSkillApiHighLatency'
+                        THEN 'http://localhost:8000/runbooks/jobskill_api_high_latency.md'
+                    WHEN alert_name = 'JobSkillPipelineCheckFailure'
+                        THEN 'http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md'
+                    WHEN alert_name IN (
+                        'JobSkillPromotedModelLowAccuracy',
+                        'JobSkillPromotedModelLowF1'
+                    )
+                        THEN 'http://localhost:8000/runbooks/jobskill_promoted_model_low_performance.md'
+                    ELSE 'http://localhost:8000/runbooks'
+                END
+            ) AS runbook_url,
+
+            COALESCE(
+                annotations ->> 'dashboard_url',
+                'http://localhost:3000'
+            ) AS dashboard_url,
+
+            COALESCE(
+                annotations ->> 'prometheus_url',
+                'http://localhost:9090/alerts'
+            ) AS prometheus_url,
+
             starts_at,
             ends_at,
             last_received_at,
@@ -382,6 +416,22 @@ def fetch_current_alert_states() -> pd.DataFrame:
             updated_at DESC
         """
     )
+
+def get_alert_link_column_config() -> dict:
+    return {
+        "runbook_url": st.column_config.LinkColumn(
+            "Runbook",
+            display_text="Open runbook",
+        ),
+        "dashboard_url": st.column_config.LinkColumn(
+            "Grafana",
+            display_text="Open Grafana",
+        ),
+        "prometheus_url": st.column_config.LinkColumn(
+            "Prometheus",
+            display_text="Open Prometheus",
+        ),
+    }
 
 def fetch_recent_alert_events(limit: int = 50) -> pd.DataFrame:
     engine = get_engine()
@@ -397,6 +447,40 @@ def fetch_recent_alert_events(limit: int = 50) -> pd.DataFrame:
             instance,
             summary,
             description,
+
+            COALESCE(
+                annotations ->> 'runbook_url',
+                CASE
+                    WHEN alert_name = 'JobSkillApiMetricsDown'
+                        THEN 'http://localhost:8000/runbooks/jobskill_api_metrics_down.md'
+                    WHEN alert_name IN (
+                        'JobSkillApiHighLowConfidenceRatio',
+                        'JobSkillBatchHighLowConfidenceRatio'
+                    )
+                        THEN 'http://localhost:8000/runbooks/jobskill_high_low_confidence_ratio.md'
+                    WHEN alert_name = 'JobSkillApiHighLatency'
+                        THEN 'http://localhost:8000/runbooks/jobskill_api_high_latency.md'
+                    WHEN alert_name = 'JobSkillPipelineCheckFailure'
+                        THEN 'http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md'
+                    WHEN alert_name IN (
+                        'JobSkillPromotedModelLowAccuracy',
+                        'JobSkillPromotedModelLowF1'
+                    )
+                        THEN 'http://localhost:8000/runbooks/jobskill_promoted_model_low_performance.md'
+                    ELSE 'http://localhost:8000/runbooks'
+                END
+            ) AS runbook_url,
+
+            COALESCE(
+                annotations ->> 'dashboard_url',
+                'http://localhost:3000'
+            ) AS dashboard_url,
+
+            COALESCE(
+                annotations ->> 'prometheus_url',
+                'http://localhost:9090/alerts'
+            ) AS prometheus_url,
+
             starts_at,
             ends_at,
             created_at
@@ -477,6 +561,25 @@ def render_current_alerts_section() -> None:
 
     st.caption(f"Latest updated at: {latest_updated_at}")
 
+    alert_column_order = [
+        "status",
+        "alert_name",
+        "severity",
+        "service",
+        "summary",
+        "description",
+        "runbook_url",
+        "dashboard_url",
+        "prometheus_url",
+        "instance",
+        "starts_at",
+        "ends_at",
+        "last_received_at",
+        "updated_at",
+    ]
+
+    alert_column_config = get_alert_link_column_config()
+
     st.subheader("Firing Alerts")
 
     if firing_df.empty:
@@ -486,6 +589,8 @@ def render_current_alerts_section() -> None:
             firing_df,
             use_container_width=True,
             hide_index=True,
+            column_order=alert_column_order,
+            column_config=alert_column_config,
         )
 
     st.subheader("All Current Alert States")
@@ -494,6 +599,8 @@ def render_current_alerts_section() -> None:
         df,
         use_container_width=True,
         hide_index=True,
+        column_order=alert_column_order,
+        column_config=alert_column_config,
     )
 
 def render_alert_history_section() -> None:
@@ -568,6 +675,7 @@ def render_alert_history_section() -> None:
         recent_alerts_df,
         use_container_width=True,
         hide_index=True,
+        column_config=get_alert_link_column_config(),
     )
 
 def main():
