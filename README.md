@@ -5,7 +5,7 @@
 
 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow와 MLflow를 이용해 데이터 수집, 원천 적재, 전처리, 데이터 품질 검증, 모델 학습, 성능 검증, 모델 승격, 일괄 예측, API 추론, 리포트 생성까지 연결하는 경량 MLOps 파이프라인 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, prediction drift gate, 운영 로그 retention cleanup, FastAPI `/metrics` 운영 지표 노출, Prometheus 기반 metrics 수집, Prometheus alert rule 평가, Alertmanager webhook alert 수신, alert event/current state 저장, Alertmanager 기반 Slack 알림 전송, Grafana 기반 모니터링 대시보드, Streamlit 기반 운영 대시보드와 Alert History, Pipeline Notification, 샘플 API 요청 검증, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동/API 예측 로그/모니터링 경로 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라, 학습 전 데이터 품질 검증, 모델 성능 gate, best model promotion, 예측 결과 lineage 저장, FastAPI serving model 자동 reload, source별 데이터 품질 리포트, 데이터 소스 모드 분리, 외부 수집 실패 fallback, API 요청/응답 로그, prediction quality gate, prediction drift gate, 운영 로그 retention cleanup, FastAPI `/metrics` 운영 지표 노출, Prometheus 기반 metrics 수집, Prometheus alert rule 평가, Alertmanager webhook alert 수신, alert event/current state 저장, Alertmanager 기반 Slack 알림 전송, alert별 runbook 문서화, FastAPI 기반 runbook HTML 서빙, Slack/Streamlit 대시보드의 runbook 링크 연결, Grafana 기반 모니터링 대시보드, Streamlit 기반 운영 대시보드와 Alert History, Pipeline Notification, 샘플 API 요청 검증, Makefile 기반 실행 명령어 표준화, smoke check 자동 검증, GitHub Actions 기반 테스트/코드 품질/서비스 기동/API 예측 로그/모니터링 경로 검증까지 포함한 end-to-end MLOps 흐름을 구성하는 것을 목표로 합니다.
 
 ## 주요 업데이트 내역
 
@@ -19,8 +19,18 @@
 - `channel` override 없이 Slack Incoming Webhook 기본 채널을 사용하는 설정 예시 추가
 - Alertmanager direct alert API 기반 Slack 알림 테스트 절차 추가
 - Alertmanager Slack 알림 화면 캡처 `docs/images/alert.png` 추가
+- alert별 운영 대응 문서 `docs/runbooks/*.md` 추가
+- Prometheus alert rule에 `runbook_url`, `dashboard_url`, `prometheus_url` annotation 추가
+- FastAPI `GET /runbooks` / `GET /runbooks/{filename}` endpoint 추가
+- Markdown runbook을 브라우저에서 읽기 쉽도록 FastAPI에서 HTML로 렌더링
+- raw Markdown 확인용 `GET /runbooks/{filename}/raw` endpoint 추가
+- Slack 알림 메시지에 Runbook / Grafana / Prometheus 클릭 링크 추가
+- FastAPI webhook은 firing/resolved alert를 모두 저장하고, Slack은 firing 중심으로 전송하도록 알림 노이즈 조정
+- API low confidence alert의 최소 예측 건수와 지속 시간을 조정해 테스트 데이터로 인한 alert flapping 완화
 - Streamlit Dashboard에서 Current Alerts와 Alert History를 분리
+- Streamlit Current Alerts / Alert History에 Runbook, Grafana, Prometheus 링크 컬럼 추가
 - Grafana Dashboard에서 current alert state와 historical alert event 패널 구분
+- API 이미지 빌드 경량화를 위해 `requirements-api.txt` 분리
 
 2026-07-09
 - Prometheus alert rule 추가
@@ -151,6 +161,9 @@
 → FastAPI `/alertmanager/webhook`으로 alert 이벤트 수신
 → alert_events / alert_current_states에 alert 이력과 현재 상태 저장
 → Alertmanager Slack receiver로 운영 알림 전송
+→ Prometheus alert annotation으로 Runbook / Grafana / Prometheus 링크 제공
+→ FastAPI `/runbooks`로 alert별 runbook HTML 서빙
+→ Slack과 Streamlit Dashboard에서 runbook 링크 기반 운영 대응
 → Grafana Dashboard로 Prometheus 지표와 alert event/current state 패널 시각화
 → Streamlit Dashboard로 모델/데이터/API 품질 지표와 Alert History 시각화
 → FastAPI serving model 자동 reload
@@ -234,6 +247,9 @@ flowchart LR
     PROM --> RULES[Prometheus Alert Rules]
     RULES --> AM[Alertmanager]
     AM --> ASLACK[Slack Alert Notification]
+    AM --> RUNBOOK[FastAPI Runbook HTML]
+    ASLACK --> RUNBOOK
+    DASH --> RUNBOOK
     AM --> AE
     AM --> ACS
     PROM --> GRAFANA[Grafana Dashboard]
@@ -294,7 +310,8 @@ Docker Compose
 │   ├── /model
 │   ├── /reload-model
 │   ├── /metrics
-│   └── /alertmanager/webhook
+│   ├── /alertmanager/webhook
+│   └── /runbooks
 ├── Streamlit Dashboard
 │   ├── latest promoted model 조회
 │   ├── source별 데이터 품질 조회
@@ -302,6 +319,7 @@ Docker Compose
 │   ├── pipeline check 결과 조회
 │   ├── FastAPI prediction logs 조회
 │   ├── Current Alerts 조회
+│   ├── Current Alerts Runbook / Grafana / Prometheus 링크 제공
 │   ├── Alert History 조회
 │   └── recent predictions 조회
 ├── Pipeline Notification
@@ -324,7 +342,9 @@ Docker Compose
 │   ├── Alertmanager webhook routing
 │   ├── Alertmanager Slack notification routing
 │   ├── FastAPI /alertmanager/webhook alert 수신
+│   ├── FastAPI /runbooks alert runbook HTML 서빙
 │   ├── alert_events / alert_current_states 저장
+│   ├── alert별 runbook 문서 관리
 │   ├── Grafana datasource provisioning
 │   └── Grafana JobSkill MLOps Overview dashboard
 └── Local / CI Validation
@@ -346,6 +366,7 @@ Preprocessing   : pandas
 Model           : scikit-learn
 API             : FastAPI
 Dashboard       : Streamlit, Plotly, Grafana
+Runbook         : Markdown, FastAPI HTML Rendering
 Monitoring      : Prometheus, Prometheus Text Format
 Alerting        : Prometheus Alert Rules, Alertmanager, FastAPI Webhook, Slack Incoming Webhook
 Notification    : Slack Incoming Webhook, requests
@@ -367,6 +388,7 @@ Container       : Docker Compose
 ├── Makefile
 ├── docker-compose.yml
 ├── requirements.txt
+├── requirements-api.txt
 ├── requirements-dev.txt
 ├── pyproject.toml
 ├── pytest.ini
@@ -467,6 +489,13 @@ Container       : Docker Compose
 ├── airflow_logs/
 ├── docs/
 │   ├── sample_pipeline_report.md
+│   ├── runbooks/
+│   │   ├── jobskill_alertmanager_slack_notification.md
+│   │   ├── jobskill_api_high_latency.md
+│   │   ├── jobskill_api_metrics_down.md
+│   │   ├── jobskill_high_low_confidence_ratio.md
+│   │   ├── jobskill_pipeline_check_failure.md
+│   │   └── jobskill_promoted_model_low_performance.md
 │   └── images/
 │       ├── Airflow DAG success.png
 │       ├── dashboard.png
@@ -1027,6 +1056,9 @@ WHERE COALESCE(prediction_source, 'BATCH') = 'BATCH';
 GET  /
 GET  /model
 GET  /metrics
+GET  /runbooks
+GET  /runbooks/{filename}
+GET  /runbooks/{filename}/raw
 POST /reload-model
 POST /predict
 POST /alertmanager/webhook
@@ -1159,6 +1191,59 @@ jobskill_alert_current_states_total{alert_name="JobSkillApiHighLowConfidenceRati
 
 이 엔드포인트는 Prometheus를 붙이기 전 단계에서 서비스가 외부 모니터링 시스템에 제공할 운영 지표를 표준화하는 역할을 합니다.
 
+### 15-3. Alert Runbook API
+
+`src/inference/api.py`  
+`docs/runbooks/*.md`
+
+Prometheus alert가 발생했을 때 Slack이나 Streamlit Dashboard에서 바로 대응 문서를 열 수 있도록 FastAPI에서 runbook을 제공합니다.
+
+제공 endpoint:
+
+```text
+GET /runbooks
+GET /runbooks/{filename}
+GET /runbooks/{filename}/raw
+```
+
+동작 방식:
+
+```text
+docs/runbooks/*.md
+→ FastAPI가 Markdown 파일 조회
+→ /runbooks/{filename}에서 HTML로 렌더링
+→ /runbooks/{filename}/raw에서 원본 Markdown 반환
+→ Slack / Streamlit Dashboard에서 클릭 가능한 링크로 사용
+```
+
+확인:
+
+```bash
+curl -fsS http://localhost:8000/runbooks
+curl -fsS http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md | head
+curl -fsS http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md/raw | head
+```
+
+브라우저에서 아래 URL을 열면 Markdown 원문이 아니라 HTML로 렌더링된 runbook 문서를 확인할 수 있습니다.
+
+```text
+http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md
+```
+
+현재 관리하는 runbook:
+
+```text
+jobskill_api_metrics_down.md
+jobskill_high_low_confidence_ratio.md
+jobskill_api_high_latency.md
+jobskill_pipeline_check_failure.md
+jobskill_promoted_model_low_performance.md
+jobskill_alertmanager_slack_notification.md
+```
+
+API 이미지 빌드 시에는 전체 개발/학습용 `requirements.txt` 대신 serving에 필요한 패키지만 담은 `requirements-api.txt`를 사용해 빌드 시간을 줄입니다.
+
+
 ### 16. Pipeline Report
 
 `src/reporting/generate_pipeline_report.py`
@@ -1262,7 +1347,12 @@ Warning Firing
 Critical Firing
 Currently Firing Alerts
 All Current Alert States
+Runbook 링크
+Grafana 링크
+Prometheus 링크
 ```
+
+Current Alerts와 Alert History는 `annotations` JSONB에 저장된 `runbook_url`, `dashboard_url`, `prometheus_url`을 컬럼으로 노출합니다. 기존 alert row에 annotation이 없더라도 alert name 기준 fallback URL을 생성해 과거 alert에서도 대응 링크를 확인할 수 있습니다.
 
 Alert History 탭에서 확인 가능한 항목:
 
@@ -1523,6 +1613,38 @@ alerting:
 make prometheus-check
 ```
 
+Prometheus alert rule에는 Slack과 Dashboard에서 바로 운영 대응 문서로 이동할 수 있도록 annotation 링크를 포함합니다.
+
+```yaml
+annotations:
+  summary: "..."
+  description: "..."
+  runbook_url: "http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md"
+  dashboard_url: "http://localhost:3000"
+  prometheus_url: "http://localhost:9090/alerts"
+```
+
+Alert별 runbook 매핑:
+
+```text
+JobSkillApiMetricsDown
+→ /runbooks/jobskill_api_metrics_down.md
+
+JobSkillApiHighLowConfidenceRatio
+JobSkillBatchHighLowConfidenceRatio
+→ /runbooks/jobskill_high_low_confidence_ratio.md
+
+JobSkillApiHighLatency
+→ /runbooks/jobskill_api_high_latency.md
+
+JobSkillPipelineCheckFailure
+→ /runbooks/jobskill_pipeline_check_failure.md
+
+JobSkillPromotedModelLowAccuracy
+JobSkillPromotedModelLowF1
+→ /runbooks/jobskill_promoted_model_low_performance.md
+```
+
 Prometheus UI에서 alert rule 상태를 확인할 수 있습니다.
 
 ```text
@@ -1561,7 +1683,7 @@ Prometheus alert rule 평가
 → Slack Incoming Webhook으로 alert 알림 전송
 ```
 
-Alertmanager는 `send_resolved: true`로 구성되어 firing 이벤트뿐 아니라 resolved 이벤트도 함께 전송합니다.
+FastAPI webhook은 `send_resolved: true`로 구성해 firing/resolved 이벤트를 모두 DB에 저장합니다. Slack은 운영 알림 노이즈를 줄이기 위해 firing 중심으로 전송하도록 구성할 수 있습니다.
 
 설정 검증:
 
@@ -1587,6 +1709,7 @@ Prometheus Alert Rule
 → Alertmanager
 → FastAPI webhook 저장
 → Slack notification 전송
+→ Runbook / Grafana / Prometheus 링크 제공
 ```
 
 Slack webhook URL은 secret이므로 Git에 포함하지 않습니다. 실제 URL은 로컬의 `.secrets/slack_webhook_url` 파일에만 저장하고, Docker Compose에서 read-only volume으로 Alertmanager 컨테이너에 mount합니다.
@@ -1648,7 +1771,7 @@ receivers:
 
     slack_configs:
       - api_url_file: "/etc/alertmanager/secrets/slack_webhook_url"
-        send_resolved: true
+        send_resolved: false
         title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
         text: |
           *Service:* {{ .CommonLabels.service }}
@@ -1658,6 +1781,9 @@ receivers:
           {{ range .Alerts }}
           *Summary:* {{ .Annotations.summary }}
           *Description:* {{ .Annotations.description }}
+          *Runbook:* <{{ .Annotations.runbook_url }}|Open runbook>
+          *Dashboard:* <{{ .Annotations.dashboard_url }}|Open Grafana>
+          *Prometheus:* <{{ .Annotations.prometheus_url }}|Open Prometheus>
           *Instance:* {{ .Labels.instance }}
           *Starts At:* {{ .StartsAt }}
           *Ends At:* {{ .EndsAt }}
@@ -1665,6 +1791,8 @@ receivers:
 ```
 
 > Slack Incoming Webhook은 생성 시 특정 채널에 고정되는 경우가 있으므로, 초기 테스트에서는 `channel:` override를 넣지 않고 webhook 기본 채널로 전송되도록 구성합니다.
+
+> FastAPI webhook은 resolved 이벤트까지 저장하지만, Slack은 `send_resolved: false`로 두면 resolved 알림이 반복적으로 올라오는 노이즈를 줄일 수 있습니다.
 
 Slack webhook 직접 테스트:
 
@@ -1685,7 +1813,10 @@ curl -X POST "http://localhost:9093/api/v2/alerts"   -H "Content-Type: applicati
       },
       "annotations": {
         "summary": "Slack receiver test alert",
-        "description": "Testing Alertmanager Slack receiver."
+        "description": "Testing Alertmanager Slack receiver.",
+        "runbook_url": "http://localhost:8000/runbooks/jobskill_alertmanager_slack_notification.md",
+        "dashboard_url": "http://localhost:3000",
+        "prometheus_url": "http://localhost:9090/alerts"
       },
       "startsAt": "2026-07-10T00:00:00Z"
     }
@@ -1696,7 +1827,51 @@ Slack 알림 예시:
 
 <img src="docs/images/alert.png" width="900">
 
-### 16-9. Alert Events / Current Alert States
+### 16-9. Alert Runbooks
+
+`docs/runbooks/`  
+`src/inference/api.py`
+
+Alert 발생 시 단순 알림에서 끝나지 않고 원인 확인과 조치까지 이어지도록 alert별 runbook을 관리합니다.
+
+Runbook 문서:
+
+```text
+docs/runbooks/jobskill_api_metrics_down.md
+docs/runbooks/jobskill_high_low_confidence_ratio.md
+docs/runbooks/jobskill_api_high_latency.md
+docs/runbooks/jobskill_pipeline_check_failure.md
+docs/runbooks/jobskill_promoted_model_low_performance.md
+docs/runbooks/jobskill_alertmanager_slack_notification.md
+```
+
+각 runbook은 아래 구조로 작성합니다.
+
+```text
+의미
+영향
+확인 명령어
+DB 확인
+주요 원인
+조치
+```
+
+FastAPI는 runbook Markdown을 HTML로 렌더링해 브라우저에서 읽기 쉬운 문서로 제공합니다.
+
+```text
+http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md
+```
+
+원본 Markdown은 `/raw` 경로에서 확인할 수 있습니다.
+
+```text
+http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md/raw
+```
+
+Prometheus alert rule의 `runbook_url` annotation, Slack 알림 메시지, Streamlit Current Alerts/Alert History에서 동일한 runbook URL을 사용합니다.
+
+
+### 16-10. Alert Events / Current Alert States
 
 `alert_events`  
 `alert_current_states`
@@ -2220,6 +2395,9 @@ docker compose build airflow-image
 
 ### 3. API 이미지 빌드
 
+API 이미지는 serving에 필요한 최소 패키지를 담은 `requirements-api.txt`를 사용합니다.  
+전체 학습/개발용 패키지를 담은 `requirements.txt`를 그대로 설치하지 않아 API 이미지 빌드 시간을 줄입니다.
+
 ```bash
 docker compose build api
 ```
@@ -2630,6 +2808,7 @@ FastAPI health
 FastAPI model info
 FastAPI metrics
 FastAPI metrics content
+FastAPI runbook endpoint
 FastAPI sample prediction requests
 api_prediction_logs 저장 확인
 model_predictions API row 저장 확인
@@ -2727,12 +2906,22 @@ API 문서:
 http://localhost:8000/docs
 ```
 
+Runbook HTML:
+
+```text
+http://localhost:8000/runbooks
+http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md
+```
+
 ### API 엔드포인트
 
 ```text
 GET  /
 GET  /model
 GET  /metrics
+GET  /runbooks
+GET  /runbooks/{filename}
+GET  /runbooks/{filename}/raw
 POST /reload-model
 POST /predict
 POST /alertmanager/webhook
