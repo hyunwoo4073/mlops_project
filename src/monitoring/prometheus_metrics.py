@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,23 @@ def _escape_label_value(value: Any) -> str:
 def _label(name: str, value: Any) -> str:
     return f'{name}="{_escape_label_value(value)}"'
 
+def is_alert_maintenance_mode_enabled() -> bool:
+    return os.getenv("ALERT_MAINTENANCE_MODE", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+
+def parse_bool(value: Any) -> bool:
+    return str(value).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
 
 def _metric_line(name: str, value: int | float, labels: dict[str, Any] | None = None) -> str:
     if labels:
@@ -56,6 +74,28 @@ def build_metrics_text() -> str:
     lines: list[str] = []
 
     with engine.begin() as conn:
+        alert_settings_exists = conn.execute(
+            text("SELECT to_regclass('public.alert_settings') IS NOT NULL")
+        ).scalar()
+
+        if alert_settings_exists:
+            maintenance_mode_row = conn.execute(
+                text(
+                    """
+                    SELECT setting_value
+                    FROM alert_settings
+                    WHERE setting_key = 'maintenance_mode'
+                    """
+                )
+            ).mappings().first()
+
+            maintenance_mode_enabled = (
+                parse_bool(maintenance_mode_row["setting_value"])
+                if maintenance_mode_row
+                else is_alert_maintenance_mode_enabled()
+            )
+        else:
+            maintenance_mode_enabled = is_alert_maintenance_mode_enabled()
         raw_rows = conn.execute(
             text(
                 """
@@ -240,6 +280,143 @@ def build_metrics_text() -> str:
                 """
             )
         ).mappings().all()
+
+        alert_acknowledgement_rows = conn.execute(
+            text(
+                """
+                SELECT
+                    COALESCE(alert_name, 'unknown') AS alert_name,
+                    COALESCE(severity, 'unknown') AS severity,
+                    COALESCE(service, 'unknown') AS service,
+                    COALESCE(status, 'unknown') AS status,
+                    COUNT(*) AS count
+                FROM alert_acknowledgements
+                GROUP BY
+                    COALESCE(alert_name, 'unknown'),
+                    COALESCE(severity, 'unknown'),
+                    COALESCE(service, 'unknown'),
+                    COALESCE(status, 'unknown')
+                ORDER BY alert_name, severity, service, status
+                """
+            )
+        ).mappings().all()
+
+        alert_response_metric_rows = conn.execute(
+            text(
+                """
+                WITH firing_alerts AS (
+                    SELECT
+                        fingerprint,
+                        COALESCE(alert_name, 'unknown') AS alert_name,
+                        COALESCE(severity, 'unknown') AS severity,
+                        COALESCE(service, 'unknown') AS service,
+                        MIN(COALESCE(starts_at, created_at)) AS first_fired_at
+                    FROM alert_events
+                    WHERE status = 'firing'
+                      AND fingerprint IS NOT NULL
+                    GROUP BY
+                        fingerprint,
+                        COALESCE(alert_name, 'unknown'),
+                        COALESCE(severity, 'unknown'),
+                        COALESCE(service, 'unknown')
+                ),
+                first_acknowledgements AS (
+                    SELECT
+                        fingerprint,
+                        MIN(created_at) AS first_acknowledged_at
+                    FROM alert_acknowledgements
+                    WHERE fingerprint IS NOT NULL
+                    GROUP BY fingerprint
+                ),
+                resolved_alerts AS (
+                    SELECT
+                        fingerprint,
+                        MIN(COALESCE(ends_at, created_at)) AS first_resolved_at
+                    FROM alert_events
+                    WHERE status = 'resolved'
+                      AND fingerprint IS NOT NULL
+                    GROUP BY fingerprint
+                )
+                SELECT
+                    f.alert_name,
+                    f.severity,
+                    f.service,
+                    COUNT(*) AS alert_count,
+                    COUNT(a.first_acknowledged_at) AS acknowledged_count,
+                    COUNT(r.first_resolved_at) AS resolved_count,
+                    ROUND(
+                        AVG(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    a.first_acknowledged_at - f.first_fired_at
+                                )
+                            ) / 60
+                        )::numeric,
+                        4
+                    ) AS avg_mtta_minutes,
+                    ROUND(
+                        AVG(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    r.first_resolved_at - f.first_fired_at
+                                )
+                            ) / 60
+                        )::numeric,
+                        4
+                    ) AS avg_mttr_minutes
+                FROM firing_alerts f
+                LEFT JOIN first_acknowledgements a
+                    ON f.fingerprint = a.fingerprint
+                   AND a.first_acknowledged_at >= f.first_fired_at
+                LEFT JOIN resolved_alerts r
+                    ON f.fingerprint = r.fingerprint
+                   AND r.first_resolved_at >= f.first_fired_at
+                GROUP BY
+                    f.alert_name,
+                    f.severity,
+                    f.service
+                ORDER BY f.alert_name, f.severity, f.service
+                """
+            )
+        ).mappings().all()
+
+        current_unacknowledged_alert_rows = conn.execute(
+            text(
+                """
+                SELECT
+                    COALESCE(cs.alert_name, 'unknown') AS alert_name,
+                    COALESCE(cs.severity, 'unknown') AS severity,
+                    COALESCE(cs.service, 'unknown') AS service,
+                    COUNT(*) AS count
+                FROM alert_current_states cs
+                LEFT JOIN alert_acknowledgements aa
+                    ON cs.fingerprint = aa.fingerprint
+                WHERE cs.status = 'firing'
+                  AND aa.id IS NULL
+                GROUP BY
+                    COALESCE(cs.alert_name, 'unknown'),
+                    COALESCE(cs.severity, 'unknown'),
+                    COALESCE(cs.service, 'unknown')
+                ORDER BY alert_name, severity, service
+                """
+            )
+        ).mappings().all()
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_maintenance_mode",
+        metric_type="gauge",
+        help_text=(
+            "Whether alert maintenance mode is enabled. "
+            "1 means non-critical alert rules should be suppressed."
+        ),
+        values=[
+            (
+                {},
+                1 if maintenance_mode_enabled else 0,
+            )
+        ],
+    )
 
     _add_metric(
         lines=lines,
@@ -443,6 +620,89 @@ def build_metrics_text() -> str:
                 int(row["count"]),
             )
             for row in alert_current_state_rows
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_acknowledgements_total",
+        metric_type="gauge",
+        help_text="Alert acknowledgements by alert name, severity, service and status.",
+        values=[
+            (
+                {
+                    "alert_name": row["alert_name"],
+                    "severity": row["severity"],
+                    "service": row["service"],
+                    "status": row["status"],
+                },
+                int(row["count"]),
+            )
+            for row in alert_acknowledgement_rows
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_avg_mtta_minutes",
+        metric_type="gauge",
+        help_text=(
+            "Average minutes from alert firing to first acknowledgement "
+            "by alert name, severity and service."
+        ),
+        values=[
+            (
+                {
+                    "alert_name": row["alert_name"],
+                    "severity": row["severity"],
+                    "service": row["service"],
+                },
+                float(row["avg_mtta_minutes"]),
+            )
+            for row in alert_response_metric_rows
+            if row["avg_mtta_minutes"] is not None
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_avg_mttr_minutes",
+        metric_type="gauge",
+        help_text=(
+            "Average minutes from alert firing to first resolved event "
+            "by alert name, severity and service."
+        ),
+        values=[
+            (
+                {
+                    "alert_name": row["alert_name"],
+                    "severity": row["severity"],
+                    "service": row["service"],
+                },
+                float(row["avg_mttr_minutes"]),
+            )
+            for row in alert_response_metric_rows
+            if row["avg_mttr_minutes"] is not None
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_alert_unacknowledged_current_total",
+        metric_type="gauge",
+        help_text=(
+            "Current firing alerts that do not have an acknowledgement record."
+        ),
+        values=[
+            (
+                {
+                    "alert_name": row["alert_name"],
+                    "severity": row["severity"],
+                    "service": row["service"],
+                },
+                int(row["count"]),
+            )
+            for row in current_unacknowledged_alert_rows
         ],
     )
 
