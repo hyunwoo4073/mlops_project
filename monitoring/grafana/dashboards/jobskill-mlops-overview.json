@@ -451,6 +451,92 @@
         "x": 12,
         "y": 52
       }
+    },
+    {
+    "id": 20,
+    "type": "stat",
+    "title": "Alert Acknowledgements",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+    },
+    "targets": [
+      {
+        "expr": "sum(jobskill_alert_acknowledgements_total)",
+        "refId": "A"
+      }
+    ],
+    "gridPos": {
+      "h": 4,
+      "w": 6,
+      "x": 0,
+      "y": 60
     }
+  },
+  {
+    "id": 21,
+    "type": "stat",
+    "title": "Current Unacknowledged Alerts",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+    },
+    "targets": [
+      {
+        "expr": "sum(jobskill_alert_unacknowledged_current_total)",
+        "refId": "A"
+      }
+    ],
+    "gridPos": {
+      "h": 4,
+      "w": 6,
+      "x": 6,
+      "y": 60
+    }
+  },
+  {
+    "id": 22,
+    "type": "barchart",
+    "title": "Average MTTA by Alert",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+    },
+    "targets": [
+      {
+        "expr": "avg by (alert_name, severity) (jobskill_alert_avg_mtta_minutes)",
+        "legendFormat": "{{alert_name}} - {{severity}}",
+        "refId": "A"
+      }
+    ],
+    "gridPos": {
+      "h": 8,
+      "w": 12,
+      "x": 0,
+      "y": 64
+    }
+  },
+  {
+    "id": 23,
+    "type": "barchart",
+    "title": "Average MTTR by Alert",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+    },
+    "targets": [
+      {
+        "expr": "avg by (alert_name, severity) (jobskill_alert_avg_mttr_minutes)",
+        "legendFormat": "{{alert_name}} - {{severity}}",
+        "refId": "A"
+      }
+    ],
+    "gridPos": {
+      "h": 8,
+      "w": 12,
+      "x": 12,
+      "y": 64
+    }
+  }
   ]
 }

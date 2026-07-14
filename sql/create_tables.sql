@@ -293,3 +293,49 @@ ON alert_current_states(service);
 
 CREATE INDEX IF NOT EXISTS idx_alert_current_states_updated_at
 ON alert_current_states(updated_at);
+
+CREATE TABLE IF NOT EXISTS alert_acknowledgements (
+    id BIGSERIAL PRIMARY KEY,
+
+    fingerprint VARCHAR(200),
+    alert_name VARCHAR(200),
+    severity VARCHAR(50),
+    service VARCHAR(100),
+    status VARCHAR(30),
+
+    acknowledged_by VARCHAR(100) DEFAULT 'local-user',
+    note TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_acknowledgements_fingerprint
+ON alert_acknowledgements(fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_alert_acknowledgements_alert_name
+ON alert_acknowledgements(alert_name);
+
+CREATE INDEX IF NOT EXISTS idx_alert_acknowledgements_created_at
+ON alert_acknowledgements(created_at);
+
+CREATE TABLE IF NOT EXISTS alert_settings (
+    setting_key VARCHAR(100) PRIMARY KEY,
+    setting_value VARCHAR(100) NOT NULL,
+    description TEXT,
+    updated_by VARCHAR(100),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO alert_settings (
+    setting_key,
+    setting_value,
+    description,
+    updated_by
+)
+VALUES (
+    'maintenance_mode',
+    'false',
+    'Suppress non-critical Prometheus alert rules during testing or maintenance.',
+    'system'
+)
+ON CONFLICT (setting_key) DO NOTHING;
