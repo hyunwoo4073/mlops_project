@@ -1,11 +1,22 @@
 import os
+import sys
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 from sqlalchemy import create_engine, text
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from src.reporting.generate_incident_response_report import build_report
+
+INCIDENT_REPORT_PATH = PROJECT_ROOT / "reports" / "latest_incident_response_report.md"
 
 def get_database_url() -> str:
     db_host = os.getenv("DB_HOST", "localhost")
@@ -30,6 +41,10 @@ def read_sql(query: str, params: dict | None = None) -> pd.DataFrame:
 
     with engine.begin() as conn:
         return pd.read_sql(text(query), conn, params=params)
+
+
+def get_alertmanager_url() -> str:
+    return os.getenv("ALERTMANAGER_URL", "http://alertmanager:9093").rstrip("/")
 
 
 def render_metric_cards():
@@ -656,6 +671,188 @@ def create_alert_acknowledgement(
         )
 
 
+def create_alertmanager_silence(
+    alert: pd.Series,
+    duration_minutes: int,
+    created_by: str,
+    reason: str,
+) -> str:
+    alertmanager_url = get_alertmanager_url()
+
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(minutes=duration_minutes)
+
+    alert_name = str(alert.get("alert_name") or "")
+    service = str(alert.get("service") or "")
+    severity = str(alert.get("severity") or "")
+
+    matchers = [
+        {
+            "name": "alertname",
+            "value": alert_name,
+            "isRegex": False,
+            "isEqual": True,
+        }
+    ]
+
+    if service:
+        matchers.append(
+            {
+                "name": "service",
+                "value": service,
+                "isRegex": False,
+                "isEqual": True,
+            }
+        )
+
+    if severity:
+        matchers.append(
+            {
+                "name": "severity",
+                "value": severity,
+                "isRegex": False,
+                "isEqual": True,
+            }
+        )
+
+    payload = {
+        "matchers": matchers,
+        "startsAt": now.isoformat().replace("+00:00", "Z"),
+        "endsAt": ends_at.isoformat().replace("+00:00", "Z"),
+        "createdBy": created_by,
+        "comment": reason,
+    }
+
+    response = requests.post(
+        f"{alertmanager_url}/api/v2/silences",
+        json=payload,
+        timeout=10,
+    )
+    response.raise_for_status()
+
+    result = response.json()
+
+    return result["silenceID"]
+
+
+def save_alert_silence_action(
+    silence_id: str,
+    alert: pd.Series,
+    duration_minutes: int,
+    created_by: str,
+    reason: str,
+) -> None:
+    engine = get_engine()
+
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(minutes=duration_minutes)
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO alert_silence_actions (
+                    silence_id,
+                    fingerprint,
+                    alert_name,
+                    severity,
+                    service,
+                    instance,
+                    duration_minutes,
+                    starts_at,
+                    ends_at,
+                    created_by,
+                    reason
+                )
+                VALUES (
+                    :silence_id,
+                    :fingerprint,
+                    :alert_name,
+                    :severity,
+                    :service,
+                    :instance,
+                    :duration_minutes,
+                    :starts_at,
+                    :ends_at,
+                    :created_by,
+                    :reason
+                )
+                """
+            ),
+            {
+                "silence_id": silence_id,
+                "fingerprint": alert.get("fingerprint"),
+                "alert_name": alert.get("alert_name"),
+                "severity": alert.get("severity"),
+                "service": alert.get("service"),
+                "instance": alert.get("instance"),
+                "duration_minutes": duration_minutes,
+                "starts_at": now.replace(tzinfo=None),
+                "ends_at": ends_at.replace(tzinfo=None),
+                "created_by": created_by,
+                "reason": reason,
+            },
+        )
+
+
+def fetch_recent_alert_silence_actions(limit: int = 30) -> pd.DataFrame:
+    return read_sql(
+        """
+        SELECT
+            id,
+            silence_id,
+            alert_name,
+            severity,
+            service,
+            instance,
+            duration_minutes,
+            starts_at,
+            ends_at,
+            created_by,
+            reason,
+            created_at
+        FROM alert_silence_actions
+        ORDER BY id DESC
+        LIMIT :limit
+        """,
+        params={"limit": limit},
+    )
+
+
+def fetch_alertmanager_silences() -> pd.DataFrame:
+    alertmanager_url = get_alertmanager_url()
+
+    try:
+        response = requests.get(
+            f"{alertmanager_url}/api/v2/silences",
+            timeout=10,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        st.warning(f"Alertmanager silence 목록을 조회하지 못했습니다: {exc}")
+        return pd.DataFrame()
+
+    silences = response.json()
+
+    rows = []
+
+    for silence in silences:
+        rows.append(
+            {
+                "id": silence.get("id"),
+                "state": silence.get("status", {}).get("state"),
+                "created_by": silence.get("createdBy"),
+                "comment": silence.get("comment"),
+                "starts_at": silence.get("startsAt"),
+                "ends_at": silence.get("endsAt"),
+                "updated_at": silence.get("updatedAt"),
+                "matchers": silence.get("matchers"),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def fetch_recent_alert_acknowledgements(limit: int = 30) -> pd.DataFrame:
     return read_sql(
         """
@@ -786,6 +983,96 @@ def fetch_alert_severity_counts() -> pd.DataFrame:
         return pd.read_sql(query, conn)
 
 
+def render_alert_silence_section(target_df: pd.DataFrame) -> None:
+    st.subheader("Silence Alert")
+
+    if target_df.empty:
+        st.info("Silence할 alert가 없습니다.")
+        return
+
+    selected_index = st.selectbox(
+        "Silence 대상 alert 선택",
+        options=target_df.index.tolist(),
+        format_func=lambda index: format_alert_option(target_df.loc[index]),
+        key="alert_silence_target",
+    )
+
+    selected_alert = target_df.loc[selected_index]
+
+    with st.form("alert_silence_form", clear_on_submit=True):
+        duration_option = st.selectbox(
+            "Silence duration",
+            options=[
+                "30 minutes",
+                "1 hour",
+                "2 hours",
+                "Custom",
+            ],
+        )
+
+        custom_minutes = st.number_input(
+            "Custom duration minutes",
+            min_value=5,
+            max_value=1440,
+            value=int(os.getenv("ALERT_SILENCE_DEFAULT_MINUTES", "30")),
+            step=5,
+            disabled=duration_option != "Custom",
+        )
+
+        created_by = st.text_input(
+            "처리자",
+            value=os.getenv("USER", "local-user"),
+            key="alert_silence_created_by",
+        )
+
+        reason = st.text_area(
+            "Silence 사유",
+            placeholder=(
+                "예: API low confidence alert 테스트 중. "
+                "30분 동안 Slack 알림을 억제하고 원인 확인 예정."
+            ),
+            height=120,
+        )
+
+        submitted = st.form_submit_button("Create silence")
+
+        if submitted:
+            if duration_option == "30 minutes":
+                duration_minutes = 30
+            elif duration_option == "1 hour":
+                duration_minutes = 60
+            elif duration_option == "2 hours":
+                duration_minutes = 120
+            else:
+                duration_minutes = int(custom_minutes)
+
+            if not reason.strip():
+                st.warning("Silence 사유를 입력해야 합니다.")
+                return
+
+            try:
+                silence_id = create_alertmanager_silence(
+                    alert=selected_alert,
+                    duration_minutes=duration_minutes,
+                    created_by=created_by.strip() or "local-user",
+                    reason=reason.strip(),
+                )
+
+                save_alert_silence_action(
+                    silence_id=silence_id,
+                    alert=selected_alert,
+                    duration_minutes=duration_minutes,
+                    created_by=created_by.strip() or "local-user",
+                    reason=reason.strip(),
+                )
+
+                st.success(f"Alertmanager silence created: {silence_id}")
+                st.rerun()
+
+            except requests.RequestException as exc:
+                st.error(f"Alertmanager silence 생성 실패: {exc}")
+
+
 def render_current_alerts_section() -> None:
     st.header("Current Alerts")
 
@@ -853,9 +1140,11 @@ def render_current_alerts_section() -> None:
             column_config=alert_column_config,
         )
 
-    st.subheader("Acknowledge Alert")
-
     target_df = firing_df if not firing_df.empty else df
+
+    render_alert_silence_section(target_df)
+
+    st.subheader("Acknowledge Alert")
 
     selected_index = st.selectbox(
         "Alert 선택",
@@ -907,6 +1196,32 @@ def render_current_alerts_section() -> None:
     else:
         st.dataframe(
             ack_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.subheader("Recent Silence Actions")
+
+    silence_action_df = fetch_recent_alert_silence_actions()
+
+    if silence_action_df.empty:
+        st.info("No alert silence action found.")
+    else:
+        st.dataframe(
+            silence_action_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("Active Alertmanager Silences")
+
+    silences_df = fetch_alertmanager_silences()
+
+    if silences_df.empty:
+        st.info("No Alertmanager silence found.")
+    else:
+        st.dataframe(
+            silences_df,
             use_container_width=True,
             hide_index=True,
         )
@@ -1229,6 +1544,85 @@ def render_alert_history_section() -> None:
         column_config=get_alert_link_column_config(),
     )
 
+def generate_incident_report_from_dashboard() -> str:
+    INCIDENT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    report = build_report()
+    INCIDENT_REPORT_PATH.write_text(report, encoding="utf-8")
+
+    return report
+
+
+def read_incident_report() -> str | None:
+    if not INCIDENT_REPORT_PATH.exists():
+        return None
+
+    return INCIDENT_REPORT_PATH.read_text(encoding="utf-8")
+
+
+def get_incident_report_updated_at() -> str:
+    if not INCIDENT_REPORT_PATH.exists():
+        return "-"
+
+    updated_at = INCIDENT_REPORT_PATH.stat().st_mtime
+
+    return pd.to_datetime(updated_at, unit="s").strftime("%Y-%m-%d %H:%M:%S")
+
+
+def render_incident_report_section() -> None:
+    st.header("Incident Response Report")
+
+    st.caption(
+        "Alert events, current alert states, acknowledgements, silences, "
+        "MTTA/MTTR, pipeline failures, API quality를 하나의 Markdown 리포트로 생성합니다."
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    report_exists = INCIDENT_REPORT_PATH.exists()
+    report_updated_at = get_incident_report_updated_at()
+
+    col1.metric("Report file", "Exists" if report_exists else "Not found")
+    col2.metric("Updated at", report_updated_at)
+    col3.metric("Path", str(INCIDENT_REPORT_PATH.relative_to(PROJECT_ROOT)))
+
+    button_col1, button_col2 = st.columns([1, 3])
+
+    with button_col1:
+        generate_clicked = st.button(
+            "Generate incident report",
+            type="primary",
+        )
+
+    if generate_clicked:
+        try:
+            report = generate_incident_report_from_dashboard()
+            st.success("Incident response report generated.")
+        except Exception as exc:
+            st.error(f"Incident response report 생성 실패: {exc}")
+            return
+    else:
+        report = read_incident_report()
+
+    if report is None:
+        st.info("아직 생성된 incident response report가 없습니다.")
+        st.code(
+            "make incident-report",
+            language="bash",
+        )
+        return
+
+    st.download_button(
+        label="Download Markdown report",
+        data=report,
+        file_name="latest_incident_response_report.md",
+        mime="text/markdown",
+    )
+
+    st.subheader("Report Preview")
+
+    st.markdown(report)
+
 def main():
     st.set_page_config(
         page_title="JobSkill MLOps Dashboard",
@@ -1244,7 +1638,7 @@ def main():
 
     render_metric_cards()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
         [
             "Model",
             "Data Quality",
@@ -1253,6 +1647,7 @@ def main():
             "API Logs",
             "Current Alerts",
             "Alert History",
+            "Incident Report",
             "Recent Predictions",
         ]
     )
@@ -1279,6 +1674,9 @@ def main():
         render_alert_history_section()
 
     with tab8:
+        render_recent_predictions()
+
+    with tab9:
         render_recent_predictions()
 
 if __name__ == "__main__":
