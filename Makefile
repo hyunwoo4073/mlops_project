@@ -1,10 +1,12 @@
 .PHONY: help build up down restart ps logs \
-        db-init airflow-init create-tables \
+        airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        test test-container lint ci smoke notify api-sample cleanup drift-check metrics \
-        prometheus prometheus-logs prometheus-check alertmanager alertmanager-logs alertmanager-check \
+        lint test test-container ci smoke alert-workflow-check \
+        report incident-report notify api-sample cleanup drift-check metrics \
+        prometheus prometheus-logs prometheus-check \
+        alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
-        report dashboard dashboard-logs \
+        dashboard dashboard-logs \
         api api-logs mlflow-logs \
         psql clean-runtime
 
@@ -13,55 +15,60 @@ help:
 	@echo "JobSkill MLOps Commands"
 	@echo ""
 	@echo "Build / Run"
-	@echo "  make build             Build Airflow and API images"
-	@echo "  make up                Start main services"
-	@echo "  make down              Stop services"
-	@echo "  make restart           Restart main services"
-	@echo "  make ps                Show container status"
-	@echo "  make logs              Show all logs"
+	@echo "  make build                  Build Airflow and API images"
+	@echo "  make up                     Start main services"
+	@echo "  make down                   Stop services"
+	@echo "  make restart                Restart main services"
+	@echo "  make ps                     Show container status"
+	@echo "  make logs                   Show all logs"
 	@echo ""
 	@echo "Database / Airflow"
-	@echo "  make airflow-init      Initialize Airflow metadata DB"
-	@echo "  make create-tables     Create or update project tables"
-	@echo "  make psql              Open PostgreSQL shell"
+	@echo "  make airflow-init           Initialize Airflow metadata DB"
+	@echo "  make create-tables          Create or update project tables"
+	@echo "  make psql                   Open PostgreSQL shell"
 	@echo ""
 	@echo "DAG"
-	@echo "  make dag-list          List DAGs"
-	@echo "  make dag-errors        Show DAG import errors"
-	@echo "  make dag-tasks         List pipeline tasks"
-	@echo "  make dag-trigger       Trigger pipeline DAG"
-	@echo "  make dag-runs          List pipeline DAG runs"
+	@echo "  make dag-list               List DAGs"
+	@echo "  make dag-errors             Show DAG import errors"
+	@echo "  make dag-tasks              List pipeline tasks"
+	@echo "  make dag-trigger            Trigger pipeline DAG"
+	@echo "  make dag-runs               List pipeline DAG runs"
 	@echo ""
-	@echo "Quality"
-	@echo "  make lint              Run ruff"
-	@echo "  make test              Run local pytest"
-	@echo "  make test-container    Run pytest in Airflow container"
-	@echo "  make ci                Run lint and pytest"
-	@echo "  make smoke             Run service smoke checks"
-	@echo "  make drift-check       Run prediction distribution drift check"
+	@echo "Quality / Validation"
+	@echo "  make lint                   Run ruff"
+	@echo "  make test                   Run local pytest"
+	@echo "  make test-container         Run pytest in Airflow container"
+	@echo "  make ci                     Run lint and pytest"
+	@echo "  make smoke                  Run service smoke checks"
+	@echo "  make alert-workflow-check   Run alert workflow smoke check"
+	@echo "  make drift-check            Run prediction distribution drift check"
 	@echo ""
 	@echo "Reports / Apps"
-	@echo "  make report            Generate pipeline report"
-	@echo "  make dashboard         Start Streamlit dashboard"
-	@echo "  make dashboard-logs    Show dashboard logs"
-	@echo "  make api               Start FastAPI"
-	@echo "  make api-logs          Show FastAPI logs"
-	@echo "  make api-sample        Send sample prediction requests to FastAPI"
-	@echo "  make metrics           Show FastAPI Prometheus metrics"
-	@echo "  make prometheus        Start Prometheus"
-	@echo "  make prometheus-logs   Show Prometheus logs"
-	@echo "  make grafana           Start Grafana"
-	@echo "  make grafana-logs      Show Grafana logs"
-	@echo "  make prometheus-check  Validate Prometheus config and alert rules"
+	@echo "  make report                 Generate pipeline report"
+	@echo "  make incident-report        Generate incident response report"
+	@echo "  make dashboard              Start Streamlit dashboard"
+	@echo "  make dashboard-logs         Show dashboard logs"
+	@echo "  make api                    Start FastAPI"
+	@echo "  make api-logs               Show FastAPI logs"
+	@echo "  make api-sample             Send sample prediction requests to FastAPI"
+	@echo "  make metrics                Show FastAPI Prometheus metrics"
+	@echo ""
+	@echo "Monitoring / Alerting"
+	@echo "  make prometheus             Start Prometheus"
+	@echo "  make prometheus-logs        Show Prometheus logs"
+	@echo "  make prometheus-check       Validate Prometheus config and alert rules"
+	@echo "  make alertmanager           Start Alertmanager"
+	@echo "  make alertmanager-logs      Show Alertmanager logs"
+	@echo "  make alertmanager-check     Validate Alertmanager config"
+	@echo "  make grafana                Start Grafana"
+	@echo "  make grafana-logs           Show Grafana logs"
 	@echo ""
 	@echo "Notification"
-	@echo "  make notify            Send or print pipeline status notification"
-	@echo "  make alertmanager       Start Alertmanager"
-	@echo "  make alertmanager-logs  Show Alertmanager logs"
-	@echo "  make alertmanager-check Validate Alertmanager config"
+	@echo "  make notify                 Send or print pipeline status notification"
 	@echo ""
 	@echo "Maintenance"
-	@echo "  make cleanup           Run cleanup retention script"
+	@echo "  make cleanup                Run cleanup retention script"
+	@echo "  make clean-runtime          Remove local runtime output files"
 	@echo ""
 
 build:
@@ -138,10 +145,16 @@ test-container:
 ci: lint test
 
 smoke:
-	./scripts/smoke_check.sh
+	bash scripts/smoke_check.sh
+
+alert-workflow-check:
+	bash scripts/check_alert_workflow.sh
 
 report:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
+
+incident-report:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_incident_response_report.py"
 
 notify:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"
@@ -161,12 +174,6 @@ api-logs:
 mlflow-logs:
 	docker compose logs --tail=100 mlflow
 
-clean-runtime:
-	rm -rf airflow_logs/*
-	rm -rf reports/*
-	rm -rf data/raw/*
-	rm -rf data/processed/*
-
 api-sample:
 	python scripts/send_sample_api_requests.py
 
@@ -184,12 +191,6 @@ prometheus:
 
 prometheus-logs:
 	docker compose logs --tail=100 prometheus
-
-grafana:
-	docker compose up -d grafana
-
-grafana-logs:
-	docker compose logs --tail=100 grafana
 
 prometheus-check:
 	docker run --rm \
@@ -210,3 +211,15 @@ alertmanager-check:
 		-v "$$(pwd)/monitoring/alertmanager:/etc/alertmanager:ro" \
 		prom/alertmanager:v0.27.0 \
 		check-config /etc/alertmanager/alertmanager.yml
+
+grafana:
+	docker compose up -d grafana
+
+grafana-logs:
+	docker compose logs --tail=100 grafana
+
+clean-runtime:
+	rm -rf airflow_logs/*
+	rm -rf reports/*
+	rm -rf data/raw/*
+	rm -rf data/processed/*

@@ -339,3 +339,36 @@ VALUES (
     'system'
 )
 ON CONFLICT (setting_key) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS alert_silence_actions (
+    id BIGSERIAL PRIMARY KEY,
+
+    silence_id VARCHAR(200),
+    fingerprint VARCHAR(200),
+
+    alert_name VARCHAR(200),
+    severity VARCHAR(50),
+    service VARCHAR(100),
+    instance VARCHAR(200),
+
+    duration_minutes INTEGER NOT NULL,
+    starts_at TIMESTAMP,
+    ends_at TIMESTAMP,
+
+    created_by VARCHAR(100) DEFAULT 'local-user',
+    reason TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_silence_actions_silence_id
+ON alert_silence_actions(silence_id);
+
+CREATE INDEX IF NOT EXISTS idx_alert_silence_actions_fingerprint
+ON alert_silence_actions(fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_alert_silence_actions_alert_name
+ON alert_silence_actions(alert_name);
+
+CREATE INDEX IF NOT EXISTS idx_alert_silence_actions_created_at
+ON alert_silence_actions(created_at);
