@@ -204,10 +204,10 @@ prometheus-check:
 prometheus-rule-test:
 	docker run --rm \
 		--entrypoint promtool \
-		-v "$$(pwd)/monitoring/prometheus/rules:/etc/prometheus/rules:ro" \
-		-w /etc/prometheus/rules \
+		-v "$$(pwd)/monitoring/prometheus:/etc/prometheus:ro" \
+		-w /etc/prometheus \
 		prom/prometheus:v2.55.1 \
-		test rules jobskill_alert_rules.test.yml
+		test rules /etc/prometheus/tests/jobskill_alert_rules.test.yml
 
 alertmanager:
 	docker compose up -d alertmanager

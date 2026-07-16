@@ -1,5 +1,5 @@
 rule_files:
-  - jobskill_alert_rules.yml
+  - /etc/prometheus/rules/jobskill_alert_rules.yml
 
 evaluation_interval: 1m
 
