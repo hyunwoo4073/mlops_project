@@ -351,7 +351,9 @@ CREATE TABLE IF NOT EXISTS alert_silence_actions (
     service VARCHAR(100),
     instance VARCHAR(200),
 
-    duration_minutes INTEGER NOT NULL,
+    action_type VARCHAR(50) DEFAULT 'CREATE',
+
+    duration_minutes INTEGER,
     starts_at TIMESTAMP,
     ends_at TIMESTAMP,
 
@@ -360,6 +362,12 @@ CREATE TABLE IF NOT EXISTS alert_silence_actions (
 
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE alert_silence_actions
+ADD COLUMN IF NOT EXISTS action_type VARCHAR(50) DEFAULT 'CREATE';
+
+ALTER TABLE alert_silence_actions
+ALTER COLUMN duration_minutes DROP NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_alert_silence_actions_silence_id
 ON alert_silence_actions(silence_id);

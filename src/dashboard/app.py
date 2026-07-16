@@ -735,17 +735,35 @@ def create_alertmanager_silence(
     return result["silenceID"]
 
 
+def expire_alertmanager_silence(silence_id: str) -> None:
+    alertmanager_url = get_alertmanager_url()
+
+    response = requests.delete(
+        f"{alertmanager_url}/api/v2/silence/{silence_id}",
+        timeout=10,
+    )
+    response.raise_for_status()
+
+
 def save_alert_silence_action(
     silence_id: str,
-    alert: pd.Series,
-    duration_minutes: int,
+    alert: pd.Series | None,
+    duration_minutes: int | None,
     created_by: str,
     reason: str,
+    action_type: str = "CREATE",
+    starts_at: datetime | None = None,
+    ends_at: datetime | None = None,
 ) -> None:
     engine = get_engine()
 
     now = datetime.now(timezone.utc)
-    ends_at = now + timedelta(minutes=duration_minutes)
+
+    if starts_at is None:
+        starts_at = now
+
+    if ends_at is None and duration_minutes is not None:
+        ends_at = now + timedelta(minutes=duration_minutes)
 
     with engine.begin() as conn:
         conn.execute(
@@ -758,6 +776,7 @@ def save_alert_silence_action(
                     severity,
                     service,
                     instance,
+                    action_type,
                     duration_minutes,
                     starts_at,
                     ends_at,
@@ -771,6 +790,7 @@ def save_alert_silence_action(
                     :severity,
                     :service,
                     :instance,
+                    :action_type,
                     :duration_minutes,
                     :starts_at,
                     :ends_at,
@@ -781,14 +801,15 @@ def save_alert_silence_action(
             ),
             {
                 "silence_id": silence_id,
-                "fingerprint": alert.get("fingerprint"),
-                "alert_name": alert.get("alert_name"),
-                "severity": alert.get("severity"),
-                "service": alert.get("service"),
-                "instance": alert.get("instance"),
+                "fingerprint": alert.get("fingerprint") if alert is not None else None,
+                "alert_name": alert.get("alert_name") if alert is not None else None,
+                "severity": alert.get("severity") if alert is not None else None,
+                "service": alert.get("service") if alert is not None else None,
+                "instance": alert.get("instance") if alert is not None else None,
+                "action_type": action_type,
                 "duration_minutes": duration_minutes,
-                "starts_at": now.replace(tzinfo=None),
-                "ends_at": ends_at.replace(tzinfo=None),
+                "starts_at": starts_at.replace(tzinfo=None) if starts_at else None,
+                "ends_at": ends_at.replace(tzinfo=None) if ends_at else None,
                 "created_by": created_by,
                 "reason": reason,
             },
@@ -800,6 +821,7 @@ def fetch_recent_alert_silence_actions(limit: int = 30) -> pd.DataFrame:
         """
         SELECT
             id,
+            action_type,
             silence_id,
             alert_name,
             severity,
@@ -851,6 +873,25 @@ def fetch_alertmanager_silences() -> pd.DataFrame:
         )
 
     return pd.DataFrame(rows)
+
+
+def format_silence_option(row: pd.Series) -> str:
+    matchers = row.get("matchers")
+
+    if isinstance(matchers, list):
+        matcher_text = ", ".join(
+            f"{matcher.get('name')}={matcher.get('value')}"
+            for matcher in matchers
+        )
+    else:
+        matcher_text = "-"
+
+    return (
+        f"{row.get('state')} | "
+        f"{row.get('id')} | "
+        f"{matcher_text} | "
+        f"ends_at={row.get('ends_at')}"
+    )
 
 
 def fetch_recent_alert_acknowledgements(limit: int = 30) -> pd.DataFrame:
@@ -1064,6 +1105,7 @@ def render_alert_silence_section(target_df: pd.DataFrame) -> None:
                     duration_minutes=duration_minutes,
                     created_by=created_by.strip() or "local-user",
                     reason=reason.strip(),
+                    action_type="CREATE",
                 )
 
                 st.success(f"Alertmanager silence created: {silence_id}")
@@ -1071,6 +1113,86 @@ def render_alert_silence_section(target_df: pd.DataFrame) -> None:
 
             except requests.RequestException as exc:
                 st.error(f"Alertmanager silence 생성 실패: {exc}")
+
+
+def render_alert_silence_management_section() -> None:
+    st.subheader("Manage Alertmanager Silences")
+
+    silences_df = fetch_alertmanager_silences()
+
+    if silences_df.empty:
+        st.info("No Alertmanager silence found.")
+        return
+
+    active_silences_df = silences_df[
+        silences_df["state"].fillna("").str.lower() == "active"
+    ]
+
+    st.caption(
+        "Active 상태의 Alertmanager silence를 선택해 수동으로 expire 처리할 수 있습니다."
+    )
+
+    st.dataframe(
+        silences_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if active_silences_df.empty:
+        st.success("No active Alertmanager silence.")
+        return
+
+    selected_index = st.selectbox(
+        "Expire 대상 silence 선택",
+        options=active_silences_df.index.tolist(),
+        format_func=lambda index: format_silence_option(active_silences_df.loc[index]),
+        key="expire_silence_target",
+    )
+
+    selected_silence = active_silences_df.loc[selected_index]
+
+    with st.form("expire_silence_form", clear_on_submit=True):
+        expired_by = st.text_input(
+            "처리자",
+            value=os.getenv("USER", "local-user"),
+            key="expire_silence_created_by",
+        )
+
+        reason = st.text_area(
+            "해제 사유",
+            placeholder=(
+                "예: 테스트 완료로 silence 해제. "
+                "이후 alert notification이 정상 전송되는지 확인 예정."
+            ),
+            height=100,
+        )
+
+        submitted = st.form_submit_button("Expire selected silence")
+
+        if submitted:
+            if not reason.strip():
+                st.warning("해제 사유를 입력해야 합니다.")
+                return
+
+            silence_id = str(selected_silence.get("id"))
+
+            try:
+                expire_alertmanager_silence(silence_id)
+
+                save_alert_silence_action(
+                    silence_id=silence_id,
+                    alert=None,
+                    duration_minutes=None,
+                    created_by=expired_by.strip() or "local-user",
+                    reason=reason.strip(),
+                    action_type="EXPIRE",
+                )
+
+                st.success(f"Alertmanager silence expired: {silence_id}")
+                st.rerun()
+
+            except requests.RequestException as exc:
+                st.error(f"Alertmanager silence expire 실패: {exc}")
 
 
 def render_current_alerts_section() -> None:
@@ -1200,7 +1322,7 @@ def render_current_alerts_section() -> None:
             hide_index=True,
         )
 
-        st.subheader("Recent Silence Actions")
+    st.subheader("Recent Silence Actions")
 
     silence_action_df = fetch_recent_alert_silence_actions()
 
@@ -1213,19 +1335,7 @@ def render_current_alerts_section() -> None:
             hide_index=True,
         )
 
-    st.subheader("Active Alertmanager Silences")
-
-    silences_df = fetch_alertmanager_silences()
-
-    if silences_df.empty:
-        st.info("No Alertmanager silence found.")
-    else:
-        st.dataframe(
-            silences_df,
-            use_container_width=True,
-            hide_index=True,
-        )
-
+    render_alert_silence_management_section()
     st.subheader("All Current Alert States")
 
     st.dataframe(

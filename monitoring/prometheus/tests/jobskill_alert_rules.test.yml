@@ -1,0 +1,250 @@
+rule_files:
+  - /etc/prometheus/rules/jobskill_alert_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: api_metrics_down_should_fire
+    interval: 1m
+    input_series:
+      - series: 'up{job="jobskill-api", instance="api:8000"}'
+        values: '0+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: JobSkillApiMetricsDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: jobskill-api
+              job: jobskill-api
+              instance: api:8000
+            exp_annotations:
+              summary: "JobSkill API metrics target is down"
+              description: "Prometheus cannot scrape FastAPI /metrics endpoint for more than 1 minute."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_api_metrics_down.md"
+              dashboard_url: "http://localhost:3000"
+              prometheus_url: "http://localhost:9090/targets"
+
+  - name: api_low_confidence_should_fire_when_count_is_enough
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x15'
+      - series: 'jobskill_model_prediction_low_confidence_ratio{prediction_source="API"}'
+        values: '0.9+0x15'
+      - series: 'jobskill_model_predictions_total{prediction_source="API"}'
+        values: '100+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: JobSkillApiHighLowConfidenceRatio
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-api
+              prediction_source: API
+            exp_annotations:
+              summary: "High low-confidence ratio in API predictions"
+              description: "More than 80% of API predictions are low confidence when API prediction count is at least 50."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_high_low_confidence_ratio.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: api_low_confidence_should_not_fire_when_count_is_low
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x15'
+      - series: 'jobskill_model_prediction_low_confidence_ratio{prediction_source="API"}'
+        values: '0.9+0x15'
+      - series: 'jobskill_model_predictions_total{prediction_source="API"}'
+        values: '20+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: JobSkillApiHighLowConfidenceRatio
+        exp_alerts: []
+
+  - name: maintenance_mode_should_suppress_api_low_confidence
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '1+0x15'
+      - series: 'jobskill_model_prediction_low_confidence_ratio{prediction_source="API"}'
+        values: '0.9+0x15'
+      - series: 'jobskill_model_predictions_total{prediction_source="API"}'
+        values: '100+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: JobSkillApiHighLowConfidenceRatio
+        exp_alerts: []
+
+  - name: batch_low_confidence_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_model_prediction_low_confidence_ratio{prediction_source="BATCH"}'
+        values: '0.5+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillBatchHighLowConfidenceRatio
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-batch-inference
+              prediction_source: BATCH
+            exp_annotations:
+              summary: "High low-confidence ratio in batch predictions"
+              description: "More than 40% of batch predictions are low confidence for more than 5 minutes."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_high_low_confidence_ratio.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: api_high_latency_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_api_prediction_avg_latency_ms{status="SUCCESS"}'
+        values: '1200+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillApiHighLatency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-api
+              status: SUCCESS
+            exp_annotations:
+              summary: "High FastAPI prediction latency"
+              description: "Average successful API prediction latency is higher than 1000ms for more than 5 minutes."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_api_high_latency.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: pipeline_check_failure_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x5'
+      - series: 'jobskill_pipeline_recent_failed_checks_total{check_type="DATA_QUALITY", status="FAIL"}'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: JobSkillPipelineCheckFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-pipeline
+            exp_annotations:
+              summary: "Recent pipeline check failure detected"
+              description: "At least one pipeline check failed within the last 1 hour."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_pipeline_check_failure.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: promoted_model_low_accuracy_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_latest_promoted_model_accuracy{model_registry_id="1"}'
+        values: '0.6+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillPromotedModelLowAccuracy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-model
+              model_registry_id: "1"
+            exp_annotations:
+              summary: "Latest promoted model accuracy is low"
+              description: "Latest promoted model accuracy is below 0.7."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_promoted_model_low_performance.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: promoted_model_low_f1_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_latest_promoted_model_f1_weighted{model_registry_id="1"}'
+        values: '0.6+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillPromotedModelLowF1
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-model
+              model_registry_id: "1"
+            exp_annotations:
+              summary: "Latest promoted model weighted F1 is low"
+              description: "Latest promoted model weighted F1 score is below 0.7."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_promoted_model_low_performance.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: unacknowledged_current_alert_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x15'
+      - series: 'jobskill_alert_unacknowledged_current_total{alert_name="JobSkillApiHighLatency", severity="warning", service="jobskill-api"}'
+        values: '1+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: JobSkillUnacknowledgedCurrentAlert
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-alerting
+            exp_annotations:
+              summary: "Unacknowledged firing alert exists"
+              description: "At least one current firing alert has no acknowledgement for more than 10 minutes."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_unacknowledged_current_alert.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: high_average_mtta_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_alert_avg_mtta_minutes{alert_name="JobSkillApiHighLatency", severity="warning", service="jobskill-api"}'
+        values: '15+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillHighAverageMTTA
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-alerting
+            exp_annotations:
+              summary: "Average alert acknowledgement time is high"
+              description: "Average MTTA is higher than 10 minutes."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_alert_response_slo_breach.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: high_average_mttr_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_alert_avg_mttr_minutes{alert_name="JobSkillApiHighLatency", severity="warning", service="jobskill-api"}'
+        values: '40+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillHighAverageMTTR
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-alerting
+            exp_annotations:
+              summary: "Average alert resolution time is high"
+              description: "Average MTTR is higher than 30 minutes."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_alert_response_slo_breach.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"

@@ -2,8 +2,8 @@
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
         lint test test-container ci smoke alert-workflow-check \
-        report incident-report notify api-sample cleanup drift-check metrics \
-        prometheus prometheus-logs prometheus-check \
+        report incident-report incident-drill notify api-sample cleanup drift-check metrics \
+        prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
         dashboard dashboard-logs \
@@ -46,6 +46,7 @@ help:
 	@echo "Reports / Apps"
 	@echo "  make report                 Generate pipeline report"
 	@echo "  make incident-report        Generate incident response report"
+	@echo "  make incident-drill         Run synthetic incident response drill"
 	@echo "  make dashboard              Start Streamlit dashboard"
 	@echo "  make dashboard-logs         Show dashboard logs"
 	@echo "  make api                    Start FastAPI"
@@ -57,6 +58,7 @@ help:
 	@echo "  make prometheus             Start Prometheus"
 	@echo "  make prometheus-logs        Show Prometheus logs"
 	@echo "  make prometheus-check       Validate Prometheus config and alert rules"
+	@echo "  make prometheus-rule-test  Run Prometheus alert rule unit tests"
 	@echo "  make alertmanager           Start Alertmanager"
 	@echo "  make alertmanager-logs      Show Alertmanager logs"
 	@echo "  make alertmanager-check     Validate Alertmanager config"
@@ -199,6 +201,14 @@ prometheus-check:
 		prom/prometheus:v2.55.1 \
 		check config /etc/prometheus/prometheus.yml
 
+prometheus-rule-test:
+	docker run --rm \
+		--entrypoint promtool \
+		-v "$$(pwd)/monitoring/prometheus:/etc/prometheus:ro" \
+		-w /etc/prometheus \
+		prom/prometheus:v2.55.1 \
+		test rules /etc/prometheus/tests/jobskill_alert_rules.test.yml
+
 alertmanager:
 	docker compose up -d alertmanager
 
@@ -223,3 +233,6 @@ clean-runtime:
 	rm -rf reports/*
 	rm -rf data/raw/*
 	rm -rf data/processed/*
+
+incident-drill:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && API_URL=http://api:8000 ALERTMANAGER_URL=http://alertmanager:9093 python scripts/run_incident_drill.py"
