@@ -153,6 +153,12 @@ services:
       - ./src:/app/src
       - ./models:/app/models
       - ./docs:/app/docs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy

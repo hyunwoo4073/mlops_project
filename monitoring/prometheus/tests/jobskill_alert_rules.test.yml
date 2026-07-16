@@ -248,3 +248,32 @@ tests:
               runbook_url: "http://localhost:8000/runbooks/jobskill_alert_response_slo_breach.md"
               dashboard_url: "http://localhost:8501"
               prometheus_url: "http://localhost:9090/alerts"
+  
+  - name: api_not_ready_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_api_ready'
+        values: '0+0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: JobSkillApiNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: jobskill-api
+            exp_annotations:
+              summary: "JobSkill API is not ready"
+              description: "FastAPI is running but readiness check failed because database, promoted model metadata, or promoted model file is not ready."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_api_not_ready.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/alerts"
+
+  - name: api_ready_should_not_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_api_ready'
+        values: '1+0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: JobSkillApiNotReady
+        exp_alerts: []

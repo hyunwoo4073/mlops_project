@@ -169,6 +169,85 @@ def health_check():
     }
 
 
+def check_database_ready() -> dict:
+    try:
+        engine = get_engine()
+
+        with engine.begin() as conn:
+            result = conn.execute(text("SELECT 1")).scalar()
+
+        return {
+            "status": "ok",
+            "result": result,
+        }
+
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "error": str(exc),
+        }
+
+def check_promoted_model_ready() -> dict:
+    try:
+        engine = get_engine()
+
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        model_name,
+                        status,
+                        promoted_model_path,
+                        created_at
+                    FROM model_registry
+                    WHERE status = 'PROMOTED'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """
+                )
+            ).mappings().first()
+
+        if row is None:
+            return {
+                "status": "fail",
+                "reason": "No PROMOTED model found in model_registry.",
+            }
+
+        promoted_model_path = row.get("promoted_model_path")
+
+        if not promoted_model_path:
+            return {
+                "status": "fail",
+                "reason": "PROMOTED model exists but promoted_model_path is empty.",
+                "model_registry_id": row.get("id"),
+            }
+
+        model_path = Path(promoted_model_path)
+
+        if not model_path.exists():
+            return {
+                "status": "fail",
+                "reason": "Promoted model file does not exist.",
+                "model_registry_id": row.get("id"),
+                "promoted_model_path": promoted_model_path,
+            }
+
+        return {
+            "status": "ok",
+            "model_registry_id": row.get("id"),
+            "model_name": row.get("model_name"),
+            "promoted_model_path": promoted_model_path,
+            "created_at": str(row.get("created_at")),
+        }
+
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "error": str(exc),
+        }
+
 @app.get("/model")
 def get_model_info():
     metadata = model_store.get_loaded_metadata()
@@ -773,3 +852,36 @@ def get_runbook_raw(filename: str):
         runbook_path.read_text(encoding="utf-8"),
         media_type="text/markdown; charset=utf-8",
     )
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "service": "jobskill-api",
+    }
+
+@app.get("/ready")
+def readiness_check():
+    database_status = check_database_ready()
+    model_status = check_promoted_model_ready()
+
+    checks = {
+        "database": database_status,
+        "promoted_model": model_status,
+    }
+
+    ready = all(check["status"] == "ok" for check in checks.values())
+
+    response = {
+        "status": "ready" if ready else "not_ready",
+        "service": "jobskill-api",
+        "checks": checks,
+    }
+
+    if not ready:
+        raise HTTPException(
+            status_code=503,
+            detail=response,
+        )
+
+    return response

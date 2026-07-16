@@ -1,7 +1,7 @@
 .PHONY: help build up down restart ps logs \
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        lint test test-container ci smoke alert-workflow-check \
+        lint test test-container ci smoke alert-workflow-check ops-check \
         report incident-report incident-drill notify api-sample cleanup drift-check metrics \
         prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
@@ -41,6 +41,7 @@ help:
 	@echo "  make ci                     Run lint and pytest"
 	@echo "  make smoke                  Run service smoke checks"
 	@echo "  make alert-workflow-check   Run alert workflow smoke check"
+	@echo "  make ops-check              Run full local ops validation checks"
 	@echo "  make drift-check            Run prediction distribution drift check"
 	@echo ""
 	@echo "Reports / Apps"
@@ -151,6 +152,9 @@ smoke:
 
 alert-workflow-check:
 	bash scripts/check_alert_workflow.sh
+
+ops-check:
+	bash scripts/check_ops_validation.sh
 
 report:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_pipeline_report.py"
