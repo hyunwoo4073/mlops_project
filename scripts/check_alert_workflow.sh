@@ -130,6 +130,10 @@ metrics_has "jobskill_alert_avg_mtta_minutes"
 metrics_has "jobskill_alert_avg_mttr_minutes"
 metrics_has "jobskill_alert_unacknowledged_current_total"
 metrics_has "jobskill_alert_maintenance_mode"
+metrics_has "jobskill_api_ready"
+metrics_has "jobskill_api_database_ready"
+metrics_has "jobskill_api_promoted_model_ready"
+metrics_has "jobskill_api_promoted_model_file_exists"
 
 echo "[alert-workflow-check] checking Prometheus query API"
 

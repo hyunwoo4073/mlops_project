@@ -14,6 +14,19 @@ groups:
           dashboard_url: "http://localhost:3000"
           prometheus_url: "http://localhost:9090/targets"
 
+      - alert: JobSkillApiNotReady
+        expr: jobskill_api_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: jobskill-api
+        annotations:
+          summary: "JobSkill API is not ready"
+          description: "FastAPI is running but readiness check failed because database, promoted model metadata, or promoted model file is not ready."
+          runbook_url: "http://localhost:8000/runbooks/jobskill_api_not_ready.md"
+          dashboard_url: "http://localhost:8501"
+          prometheus_url: "http://localhost:9090/alerts"
+
       - alert: JobSkillApiHighLowConfidenceRatio
         expr: |
           (

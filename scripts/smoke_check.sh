@@ -143,8 +143,16 @@ check_http \
   "http://localhost:5000"
 
 check_http \
-  "FastAPI health" \
+  "FastAPI root" \
   "http://localhost:8000/"
+
+check_http \
+  "FastAPI health" \
+  "http://localhost:8000/health"
+
+check_http \
+  "FastAPI readiness" \
+  "http://localhost:8000/ready"
 
 check_http \
   "FastAPI model info" \

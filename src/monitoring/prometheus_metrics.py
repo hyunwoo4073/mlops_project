@@ -68,6 +68,46 @@ def _float_or_zero(value: Any) -> float:
 
     return float(value)
 
+def resolve_model_path(model_path: str | None) -> Path | None:
+    if not model_path:
+        return None
+
+    path = Path(model_path)
+
+    if path.is_absolute():
+        return path
+
+    return Path.cwd() / path
+
+
+def build_readiness_status(latest_model: dict[str, Any] | None) -> dict[str, int]:
+    database_ready = 1
+
+    promoted_model_ready = 1 if latest_model else 0
+
+    promoted_model_file_exists = 0
+
+    if latest_model:
+        promoted_model_path = latest_model.get("promoted_model_path")
+        resolved_path = resolve_model_path(promoted_model_path)
+        promoted_model_file_exists = (
+            1 if resolved_path is not None and resolved_path.exists() else 0
+        )
+
+    api_ready = (
+        1
+        if database_ready == 1
+        and promoted_model_ready == 1
+        and promoted_model_file_exists == 1
+        else 0
+    )
+
+    return {
+        "api_ready": api_ready,
+        "database_ready": database_ready,
+        "promoted_model_ready": promoted_model_ready,
+        "promoted_model_file_exists": promoted_model_file_exists,
+    }
 
 def build_metrics_text() -> str:
     engine = get_engine()
@@ -231,8 +271,10 @@ def build_metrics_text() -> str:
                 """
                 SELECT
                     id,
+                    model_name,
                     accuracy,
-                    f1_weighted
+                    f1_weighted,
+                    promoted_model_path
                 FROM model_registry
                 WHERE status = 'PROMOTED'
                 ORDER BY id DESC
@@ -414,6 +456,63 @@ def build_metrics_text() -> str:
             (
                 {},
                 1 if maintenance_mode_enabled else 0,
+            )
+        ],
+    )
+
+    readiness_status = build_readiness_status(latest_model)
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_api_ready",
+        metric_type="gauge",
+        help_text=(
+            "Whether the FastAPI service is ready to serve prediction requests. "
+            "1 means database, promoted model metadata and promoted model file are ready."
+        ),
+        values=[
+            (
+                {},
+                readiness_status["api_ready"],
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_api_database_ready",
+        metric_type="gauge",
+        help_text="Whether the FastAPI service can query the PostgreSQL database.",
+        values=[
+            (
+                {},
+                readiness_status["database_ready"],
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_api_promoted_model_ready",
+        metric_type="gauge",
+        help_text="Whether a PROMOTED model exists in model_registry.",
+        values=[
+            (
+                {},
+                readiness_status["promoted_model_ready"],
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_api_promoted_model_file_exists",
+        metric_type="gauge",
+        help_text="Whether the promoted model file exists on the FastAPI container filesystem.",
+        values=[
+            (
+                {},
+                readiness_status["promoted_model_file_exists"],
             )
         ],
     )
