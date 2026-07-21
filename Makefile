@@ -2,7 +2,7 @@
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
         lint test test-container ci smoke alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
-        report incident-report incident-drill notify api-sample cleanup drift-check metrics \
+        report incident-report model-archive model-rollback-plan model-rollback incident-drill notify api-sample cleanup drift-check metrics \
         prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
@@ -51,6 +51,9 @@ help:
 	@echo "Reports / Apps"
 	@echo "  make report                 Generate pipeline report"
 	@echo "  make incident-report        Generate incident response report"
+	@echo "  make model-archive          Archive current promoted model"
+	@echo "  make model-rollback-plan    Show promoted model rollback plan"
+	@echo "  make model-rollback         Roll back to archived promoted model"
 	@echo "  make incident-drill         Run synthetic incident response drill"
 	@echo "  make dashboard              Start Streamlit dashboard"
 	@echo "  make dashboard-logs         Show dashboard logs"
@@ -177,6 +180,27 @@ report:
 
 incident-report:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_incident_response_report.py"
+
+model-archive:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/archive_promoted_model.py"
+
+model-rollback-plan:
+	docker compose exec \
+		-e MODEL_ROLLBACK_ARCHIVE_ID="$${MODEL_ROLLBACK_ARCHIVE_ID:-}" \
+		-e MODEL_ROLLBACK_CREATED_BY="$${MODEL_ROLLBACK_CREATED_BY:-local-user}" \
+		-e MODEL_ROLLBACK_REASON="$${MODEL_ROLLBACK_REASON:-Manual rollback to archived promoted model.}" \
+		-e MODEL_ROLLBACK_DRY_RUN=true \
+		airflow-scheduler \
+		bash -lc "cd /opt/airflow/project && python scripts/rollback_promoted_model.py"
+
+model-rollback:
+	docker compose exec \
+		-e MODEL_ROLLBACK_ARCHIVE_ID="$${MODEL_ROLLBACK_ARCHIVE_ID:-}" \
+		-e MODEL_ROLLBACK_CREATED_BY="$${MODEL_ROLLBACK_CREATED_BY:-local-user}" \
+		-e MODEL_ROLLBACK_REASON="$${MODEL_ROLLBACK_REASON:-Manual rollback to archived promoted model.}" \
+		-e MODEL_ROLLBACK_DRY_RUN=false \
+		airflow-scheduler \
+		bash -lc "cd /opt/airflow/project && python scripts/rollback_promoted_model.py"
 
 notify:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"

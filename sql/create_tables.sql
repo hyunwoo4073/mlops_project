@@ -380,3 +380,55 @@ ON alert_silence_actions(alert_name);
 
 CREATE INDEX IF NOT EXISTS idx_alert_silence_actions_created_at
 ON alert_silence_actions(created_at);
+
+CREATE TABLE IF NOT EXISTS model_promotion_archives (
+    id BIGSERIAL PRIMARY KEY,
+    model_registry_id BIGINT,
+    model_name VARCHAR(200),
+    model_version VARCHAR(100),
+    model_run_id VARCHAR(200),
+    source_model_path TEXT,
+    archived_model_path TEXT NOT NULL,
+    accuracy DOUBLE PRECISION,
+    f1_weighted DOUBLE PRECISION,
+    archive_reason TEXT,
+    created_by VARCHAR(100) DEFAULT 'system',
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_promotion_archives_registry_id
+ON model_promotion_archives(model_registry_id);
+
+CREATE INDEX IF NOT EXISTS idx_model_promotion_archives_model_name
+ON model_promotion_archives(model_name);
+
+CREATE INDEX IF NOT EXISTS idx_model_promotion_archives_created_at
+ON model_promotion_archives(created_at);
+
+CREATE TABLE IF NOT EXISTS model_rollback_actions (
+    id BIGSERIAL PRIMARY KEY,
+    archive_id BIGINT,
+    target_model_registry_id BIGINT,
+    previous_model_registry_id BIGINT,
+    archived_model_path TEXT,
+    restored_model_path TEXT,
+    backup_model_path TEXT,
+    rollback_reason TEXT,
+    created_by VARCHAR(100) DEFAULT 'system',
+    status VARCHAR(50) DEFAULT 'SUCCESS',
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_rollback_actions_archive_id
+ON model_rollback_actions(archive_id);
+
+CREATE INDEX IF NOT EXISTS idx_model_rollback_actions_target_model_registry_id
+ON model_rollback_actions(target_model_registry_id);
+
+CREATE INDEX IF NOT EXISTS idx_model_rollback_actions_previous_model_registry_id
+ON model_rollback_actions(previous_model_registry_id);
+
+CREATE INDEX IF NOT EXISTS idx_model_rollback_actions_created_at
+ON model_rollback_actions(created_at);
