@@ -1,0 +1,37 @@
+required_metrics:
+  # API readiness
+  - jobskill_api_ready
+  - jobskill_api_database_ready
+  - jobskill_api_promoted_model_ready
+  - jobskill_api_promoted_model_file_exists
+
+  # Model prediction metrics
+  - jobskill_model_predictions_total
+  - jobskill_model_prediction_avg_confidence
+  - jobskill_model_prediction_low_confidence_ratio
+
+  # API request metrics
+  - jobskill_api_prediction_requests_total
+  - jobskill_api_prediction_avg_latency_ms
+
+  # Pipeline check metrics
+  - jobskill_pipeline_check_results_total
+  - jobskill_pipeline_recent_failed_checks_total
+
+  # Model registry metrics
+  - jobskill_model_registry_records_total
+  - jobskill_latest_promoted_model_accuracy
+  - jobskill_latest_promoted_model_f1_weighted
+
+  # Alert event metrics
+  - jobskill_alert_events_total
+  - jobskill_alert_current_states_total
+
+  # Alert response metrics
+  - jobskill_alert_acknowledgements_total
+  - jobskill_alert_avg_mtta_minutes
+  - jobskill_alert_avg_mttr_minutes
+  - jobskill_alert_unacknowledged_current_total
+
+  # Alert control metrics
+  - jobskill_alert_maintenance_mode

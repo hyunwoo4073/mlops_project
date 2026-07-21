@@ -667,21 +667,34 @@ def build_metrics_text() -> str:
         ],
     )
 
+    recent_failed_check_values = [
+        (
+            {
+                "check_type": row["check_type"],
+                "status": row["status"],
+            },
+            row["cnt"],
+        )
+        for row in recent_failed_check_rows
+    ]
+
+    if not recent_failed_check_values:
+        recent_failed_check_values = [
+            (
+                {
+                    "check_type": "none",
+                    "status": "PASS",
+                },
+                0,
+            )
+        ]
+
     _add_metric(
         lines=lines,
         name="jobskill_pipeline_recent_failed_checks_total",
         metric_type="gauge",
-        help_text="Recent failed pipeline check results in the last 1 hour by check type and status.",
-        values=[
-            (
-                {
-                    "check_type": row["check_type"],
-                    "status": row["status"],
-                },
-                int(row["count"]),
-            )
-            for row in recent_failed_check_rows
-        ],
+        help_text="Recent failed pipeline checks within the alert evaluation window.",
+        values=recent_failed_check_values,
     )
 
     _add_metric(

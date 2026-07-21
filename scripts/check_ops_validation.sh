@@ -42,11 +42,17 @@ check_url() {
 
 check_metric() {
   local metric_name="$1"
+  local metrics_body
 
   print_section "Metric: ${metric_name}"
 
-  curl -fsS "${API_URL}/metrics" | grep -q "$metric_name" \
-    || fail "Metric not found: ${metric_name}"
+  metrics_body="$(curl -fsS "${API_URL}/metrics")"
+
+  if ! grep -q "${metric_name}" <<< "${metrics_body}"; then
+    echo "[DEBUG] first metrics lines:"
+    echo "${metrics_body}" | head -80
+    fail "Metric not found: ${metric_name}"
+  fi
 
   pass "Metric found: ${metric_name}"
 }
@@ -103,18 +109,21 @@ check_url \
   "FastAPI metrics" \
   "${API_URL}/metrics"
 
-check_metric "jobskill_api_ready"
-check_metric "jobskill_api_database_ready"
-check_metric "jobskill_api_promoted_model_ready"
-check_metric "jobskill_api_promoted_model_file_exists"
-check_metric "jobskill_alert_maintenance_mode"
-check_metric "jobskill_alert_events_total"
-check_metric "jobskill_alert_current_states_total"
+check_command \
+  "Metrics contract" \
+  python scripts/check_metrics_contract.py --url "${API_URL}/metrics"
 
-check_file "docs/runbooks/jobskill_api_not_ready.md"
-check_file "docs/runbooks/jobskill_api_metrics_down.md"
-check_file "docs/runbooks/jobskill_high_low_confidence_ratio.md"
-check_file "docs/runbooks/jobskill_pipeline_check_failure.md"
+check_command \
+  "Alert rule metric dependencies" \
+  python scripts/check_alert_rule_metric_dependencies.py --url "${API_URL}/metrics"
+
+check_command \
+  "Runbook coverage" \
+  make runbook-check
+
+check_command \
+  "Runbook API coverage" \
+  bash -lc "RUNBOOK_CHECK_API=true API_URL=${API_URL} python scripts/check_runbook_coverage.py"
 
 check_command \
   "Service smoke check" \
