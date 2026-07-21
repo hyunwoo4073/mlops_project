@@ -40,12 +40,16 @@ http_check() {
 
 metrics_has() {
   local metric_name="$1"
+  local metrics_body
 
   echo "[alert-workflow-check] checking metric: ${metric_name}"
 
-  if ! curl -fsS "${API_URL}/metrics" | grep -q "${metric_name}"; then
-    echo "[alert-workflow-check][ERROR] metric not found: ${metric_name}"
-    exit 1
+  metrics_body="$(curl -fsS "${API_URL}/metrics")"
+
+  if ! grep -q "${metric_name}" <<< "${metrics_body}"; then
+    echo "[alert-workflow-check][DEBUG] first metrics lines:"
+    echo "${metrics_body}" | head -80
+    fail "metric not found: ${metric_name}"
   fi
 }
 

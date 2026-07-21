@@ -1,7 +1,7 @@
 .PHONY: help build up down restart ps logs \
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        lint test test-container ci smoke alert-workflow-check ops-check \
+        lint test test-container ci smoke alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
         report incident-report incident-drill notify api-sample cleanup drift-check metrics \
         prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
@@ -41,6 +41,10 @@ help:
 	@echo "  make ci                     Run lint and pytest"
 	@echo "  make smoke                  Run service smoke checks"
 	@echo "  make alert-workflow-check   Run alert workflow smoke check"
+	@echo "  make runbook-check          Validate alert runbook coverage"
+	@echo "  make metrics-contract-check Validate required Prometheus metrics"
+	@echo "  make alert-rule-metric-check Validate alert rule metric dependencies"
+	@echo "  make ops-static-check       Run static ops validation checks"
 	@echo "  make ops-check              Run full local ops validation checks"
 	@echo "  make drift-check            Run prediction distribution drift check"
 	@echo ""
@@ -59,7 +63,7 @@ help:
 	@echo "  make prometheus             Start Prometheus"
 	@echo "  make prometheus-logs        Show Prometheus logs"
 	@echo "  make prometheus-check       Validate Prometheus config and alert rules"
-	@echo "  make prometheus-rule-test  Run Prometheus alert rule unit tests"
+	@echo "  make prometheus-rule-test   Run Prometheus alert rule unit tests"
 	@echo "  make alertmanager           Start Alertmanager"
 	@echo "  make alertmanager-logs      Show Alertmanager logs"
 	@echo "  make alertmanager-check     Validate Alertmanager config"
@@ -152,6 +156,18 @@ smoke:
 
 alert-workflow-check:
 	bash scripts/check_alert_workflow.sh
+
+runbook-check:
+	python scripts/check_runbook_coverage.py
+
+metrics-contract-check:
+	python scripts/check_metrics_contract.py --url http://localhost:8000/metrics
+
+alert-rule-metric-check:
+	python scripts/check_alert_rule_metric_dependencies.py --url http://localhost:8000/metrics
+
+ops-static-check:
+	bash scripts/check_static_ops_validation.sh
 
 ops-check:
 	bash scripts/check_ops_validation.sh
