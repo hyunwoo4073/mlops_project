@@ -60,6 +60,12 @@ def run_preprocess_jobs():
     main()
 
 
+def run_check_data_contract():
+    from src.quality.check_data_contract import main
+
+    main()
+
+
 def run_check_training_data():
     from src.quality.check_training_data import main
 
@@ -147,6 +153,11 @@ with DAG(
         python_callable=run_preprocess_jobs,
     )
 
+    check_data_contract = PythonOperator(
+        task_id="check_data_contract",
+        python_callable=run_check_data_contract,
+    )
+
     check_training_data = PythonOperator(
         task_id="check_training_data",
         python_callable=run_check_training_data,
@@ -200,6 +211,7 @@ with DAG(
         >> load_raw_jobs
         >> crawl_remoteok_jobs
         >> preprocess_jobs
+        >> check_data_contract
         >> check_training_data
         >> train_model
         >> check_model_performance
