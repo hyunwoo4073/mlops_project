@@ -1,8 +1,8 @@
 .PHONY: help build up down restart ps logs \
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        lint test test-container ci smoke alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
-        report incident-report model-archive model-rollback-plan model-rollback incident-drill notify api-sample cleanup drift-check metrics \
+        lint test test-container ci smoke data-contract-check alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
+        report incident-report model-archive model-rollback-plan model-rollback model-lifecycle-check notify api-sample cleanup drift-check metrics \
         prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
@@ -40,6 +40,7 @@ help:
 	@echo "  make test-container         Run pytest in Airflow container"
 	@echo "  make ci                     Run lint and pytest"
 	@echo "  make smoke                  Run service smoke checks"
+	@echo "  make data-contract-check    Validate raw/cleaned data contract"
 	@echo "  make alert-workflow-check   Run alert workflow smoke check"
 	@echo "  make runbook-check          Validate alert runbook coverage"
 	@echo "  make metrics-contract-check Validate required Prometheus metrics"
@@ -54,6 +55,7 @@ help:
 	@echo "  make model-archive          Archive current promoted model"
 	@echo "  make model-rollback-plan    Show promoted model rollback plan"
 	@echo "  make model-rollback         Roll back to archived promoted model"
+	@echo "  make model-lifecycle-check Validate model registry, archive and rollback integrity"
 	@echo "  make incident-drill         Run synthetic incident response drill"
 	@echo "  make dashboard              Start Streamlit dashboard"
 	@echo "  make dashboard-logs         Show dashboard logs"
@@ -157,6 +159,9 @@ ci: lint test
 smoke:
 	bash scripts/smoke_check.sh
 
+data-contract-check:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_data_contract.py"
+
 alert-workflow-check:
 	bash scripts/check_alert_workflow.sh
 
@@ -201,6 +206,9 @@ model-rollback:
 		-e MODEL_ROLLBACK_DRY_RUN=false \
 		airflow-scheduler \
 		bash -lc "cd /opt/airflow/project && python scripts/rollback_promoted_model.py"
+
+model-lifecycle-check:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/check_model_lifecycle_integrity.py"
 
 notify:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"

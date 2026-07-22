@@ -126,6 +126,14 @@ check_command \
   bash -lc "RUNBOOK_CHECK_API=true API_URL=${API_URL} python scripts/check_runbook_coverage.py"
 
 check_command \
+  "Data contract check" \
+  make data-contract-check
+
+check_command \
+  "Model lifecycle integrity" \
+  make model-lifecycle-check  
+
+check_command \
   "Service smoke check" \
   bash scripts/smoke_check.sh
 

@@ -1024,6 +1024,105 @@ def fetch_alert_severity_counts() -> pd.DataFrame:
         return pd.read_sql(query, conn)
 
 
+def dashboard_table_exists(table_name: str) -> bool:
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        return bool(
+            conn.execute(
+                text("SELECT to_regclass(:table_name) IS NOT NULL"),
+                {"table_name": f"public.{table_name}"},
+            ).scalar()
+        )
+
+
+def fetch_current_promoted_model() -> pd.DataFrame:
+    return read_sql("""
+        SELECT
+            id,
+            model_name,
+            NULL::text AS model_version,
+            run_id AS model_run_id,
+            status,
+            promoted_model_path,
+            ROUND(accuracy::numeric, 4) AS accuracy,
+            ROUND(f1_weighted::numeric, 4) AS f1_weighted,
+            created_at
+        FROM model_registry
+        WHERE status = 'PROMOTED'
+        ORDER BY id DESC
+        LIMIT 1
+    """)
+
+
+def fetch_model_promotion_archives(limit: int = 50) -> pd.DataFrame:
+    if not dashboard_table_exists("model_promotion_archives"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            id,
+            model_registry_id,
+            model_name,
+            model_version,
+            model_run_id,
+            source_model_path,
+            archived_model_path,
+            accuracy,
+            f1_weighted,
+            archive_reason,
+            created_by,
+            created_at
+        FROM model_promotion_archives
+        ORDER BY id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def fetch_model_rollback_actions(limit: int = 50) -> pd.DataFrame:
+    if not dashboard_table_exists("model_rollback_actions"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            id,
+            archive_id,
+            target_model_registry_id,
+            previous_model_registry_id,
+            archived_model_path,
+            restored_model_path,
+            backup_model_path,
+            rollback_reason,
+            created_by,
+            status,
+            created_at
+        FROM model_rollback_actions
+        ORDER BY id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def fetch_model_lifecycle_summary() -> dict:
+    archive_df = fetch_model_promotion_archives(limit=1000)
+    rollback_df = fetch_model_rollback_actions(limit=1000)
+
+    return {
+        "archive_count": 0 if archive_df.empty else len(archive_df),
+        "rollback_count": 0 if rollback_df.empty else len(rollback_df),
+        "latest_archive_at": "-" if archive_df.empty else str(archive_df.iloc[0]["created_at"]),
+        "latest_rollback_at": "-" if rollback_df.empty else str(rollback_df.iloc[0]["created_at"]),
+    }
+
+
+def format_archive_option(row: pd.Series) -> str:
+    return (
+        f"archive_id={row.get('id')} | "
+        f"registry_id={row.get('model_registry_id')} | "
+        f"f1={row.get('f1_weighted')} | "
+        f"created_at={row.get('created_at')}"
+    )
+
+
 def render_alert_silence_section(target_df: pd.DataFrame) -> None:
     st.subheader("Silence Alert")
 
@@ -1733,6 +1832,143 @@ def render_incident_report_section() -> None:
 
     st.markdown(report)
 
+
+def render_model_lifecycle_section() -> None:
+    st.header("Model Lifecycle")
+
+    st.caption(
+        "현재 promoted model, promoted model archive 이력, rollback action 이력을 조회합니다. "
+        "실제 rollback은 안전을 위해 CLI 명령으로 수행합니다."
+    )
+
+    current_model_df = fetch_current_promoted_model()
+    archive_df = fetch_model_promotion_archives()
+    rollback_df = fetch_model_rollback_actions()
+    summary = fetch_model_lifecycle_summary()
+
+    st.subheader("Current Promoted Model")
+
+    if current_model_df.empty:
+        st.warning("현재 PROMOTED 상태의 모델이 없습니다.")
+    else:
+        current_model = current_model_df.iloc[0]
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Registry ID", str(current_model.get("id")))
+        col2.metric("Accuracy", str(current_model.get("accuracy")))
+        col3.metric("F1 Weighted", str(current_model.get("f1_weighted")))
+        col4.metric("Status", str(current_model.get("status")))
+
+        st.dataframe(current_model_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    st.subheader("Model Lifecycle Summary")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Archived Models", summary["archive_count"])
+    col2.metric("Rollback Actions", summary["rollback_count"])
+    col3.metric("Latest Archive", summary["latest_archive_at"])
+    col4.metric("Latest Rollback", summary["latest_rollback_at"])
+
+    st.divider()
+
+    st.subheader("Promoted Model Archives")
+
+    if archive_df.empty:
+        st.info("아직 promoted model archive 이력이 없습니다.")
+        st.code("make model-archive", language="bash")
+    else:
+        st.dataframe(archive_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    st.subheader("Rollback Plan Helper")
+
+    if archive_df.empty:
+        st.info("Rollback plan을 만들 archive가 없습니다.")
+    else:
+        selected_archive_index = st.selectbox(
+            "Rollback 대상 archive 선택",
+            options=archive_df.index.tolist(),
+            format_func=lambda index: format_archive_option(archive_df.loc[index]),
+            key="model_lifecycle_rollback_archive",
+        )
+
+        selected_archive = archive_df.loc[selected_archive_index]
+        archive_id = int(selected_archive["id"])
+        target_model_registry_id = selected_archive.get("model_registry_id")
+
+        current_promoted_id = None
+
+        if not current_model_df.empty:
+            current_promoted_id = current_model_df.iloc[0].get("id")
+
+        st.write("선택한 archive 기준 rollback plan입니다.")
+
+        plan_rows = [
+            {
+                "item": "archive_id",
+                "value": archive_id,
+            },
+            {
+                "item": "target_model_registry_id",
+                "value": target_model_registry_id,
+            },
+            {
+                "item": "current_promoted_id",
+                "value": current_promoted_id,
+            },
+            {
+                "item": "archived_model_path",
+                "value": selected_archive.get("archived_model_path"),
+            },
+            {
+                "item": "target_accuracy",
+                "value": selected_archive.get("accuracy"),
+            },
+            {
+                "item": "target_f1_weighted",
+                "value": selected_archive.get("f1_weighted"),
+            },
+        ]
+
+        st.dataframe(pd.DataFrame(plan_rows), use_container_width=True, hide_index=True)
+
+        if current_promoted_id == target_model_registry_id:
+            st.info(
+                "선택한 archive의 model_registry_id가 현재 PROMOTED 모델과 같습니다. "
+                "현재 상태에서는 실제 rollback 의미가 크지 않습니다."
+            )
+        else:
+            st.warning(
+                "선택한 archive는 현재 PROMOTED 모델과 다릅니다. "
+                "rollback 대상 후보로 사용할 수 있습니다."
+            )
+
+        st.caption("실제 rollback은 파일 복구와 DB 상태 변경이 포함되므로 CLI에서 명시적으로 실행합니다.")
+
+        st.code(
+            f"""MODEL_ROLLBACK_ARCHIVE_ID={archive_id} make model-rollback-plan
+
+MODEL_ROLLBACK_ARCHIVE_ID={archive_id} make model-rollback
+
+curl -X POST http://localhost:8000/reload-model
+curl -fsS http://localhost:8000/model | jq
+curl -fsS http://localhost:8000/ready | jq""",
+            language="bash",
+        )
+
+    st.divider()
+
+    st.subheader("Recent Rollback Actions")
+
+    if rollback_df.empty:
+        st.info("아직 rollback action 이력이 없습니다.")
+    else:
+        st.dataframe(rollback_df, use_container_width=True, hide_index=True)
+
+
 def main():
     st.set_page_config(
         page_title="JobSkill MLOps Dashboard",
@@ -1750,7 +1986,7 @@ def main():
 
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
         [
-            "Model",
+            "Model Lifecycle",
             "Data Quality",
             "Prediction Quality",
             "Pipeline Checks",
@@ -1763,7 +1999,7 @@ def main():
     )
 
     with tab1:
-        render_latest_model()
+        render_model_lifecycle_section()
 
     with tab2:
         render_source_quality()
@@ -1784,7 +2020,7 @@ def main():
         render_alert_history_section()
 
     with tab8:
-        render_recent_predictions()
+        render_incident_report_section()
 
     with tab9:
         render_recent_predictions()

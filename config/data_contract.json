@@ -1,0 +1,148 @@
+{
+  "tables": {
+    "raw_job_posts": {
+      "description": "Raw job posts loaded from sample data or external crawler.",
+      "min_rows": 1,
+      "required_columns": [
+        {
+          "name": "id",
+          "types": ["bigint", "integer"]
+        },
+        {
+          "name": "source",
+          "types": ["character varying", "text"]
+        },
+        {
+          "name": "source_job_id",
+          "types": ["character varying", "text"]
+        },
+        {
+          "name": "title",
+          "types": ["character varying", "text"]
+        },
+        {
+          "name": "description",
+          "types": ["character varying", "text"]
+        }
+      ],
+      "null_checks": [
+        {
+          "column": "source",
+          "max_null_ratio": 0.0
+        },
+        {
+          "column": "title",
+          "max_null_ratio": 0.2
+        },
+        {
+          "column": "description",
+          "max_null_ratio": 0.2
+        }
+      ],
+      "non_empty_checks": [
+        {
+          "column": "title",
+          "max_empty_ratio": 0.2
+        },
+        {
+          "column": "description",
+          "max_empty_ratio": 0.2
+        }
+      ]
+    },
+    "cleaned_job_posts": {
+      "description": "Cleaned and labeled job posts used for model training and inference.",
+      "min_rows": 1,
+      "required_columns": [
+        {
+          "name": "id",
+          "types": ["bigint", "integer"]
+        },
+        {
+          "name": "raw_id",
+          "types": ["bigint", "integer"]
+        },
+        {
+          "name": "text_for_model",
+          "types": ["character varying", "text"]
+        },
+        {
+          "name": "job_category",
+          "types": ["character varying", "text"]
+        }
+      ],
+      "null_checks": [
+        {
+          "column": "raw_id",
+          "max_null_ratio": 0.0
+        },
+        {
+          "column": "text_for_model",
+          "max_null_ratio": 0.0
+        },
+        {
+          "column": "job_category",
+          "max_null_ratio": 0.0
+        }
+      ],
+      "non_empty_checks": [
+        {
+          "column": "text_for_model",
+          "max_empty_ratio": 0.0
+        },
+        {
+          "column": "job_category",
+          "max_empty_ratio": 0.0
+        }
+      ],
+      "allowed_value_checks": [
+        {
+          "column": "job_category",
+          "allowed_values": [
+            "Data Engineer",
+            "Backend Engineer",
+            "ML Engineer",
+            "DevOps Engineer",
+            "Data Analyst",
+            "Unknown"
+          ],
+          "max_invalid_ratio": 0.0
+        }
+      ]
+    },
+    "job_post_skills": {
+      "description": "Optional extracted skill records from cleaned job posts.",
+      "min_rows": 0,
+      "required_columns": [
+        {
+          "name": "id",
+          "types": ["bigint", "integer"]
+        },
+        {
+          "name": "job_post_id",
+          "types": ["bigint", "integer"]
+        },
+        {
+          "name": "skill_name",
+          "types": ["character varying", "text"]
+        }
+      ],
+      "null_checks": [
+        {
+          "column": "job_post_id",
+          "max_null_ratio": 0.0
+        },
+        {
+          "column": "skill_name",
+          "max_null_ratio": 0.0
+        }
+      ],
+      "non_empty_checks": [
+        {
+          "column": "skill_name",
+          "max_empty_ratio": 0.0
+        }
+      ]
+    }
+  }
+}
