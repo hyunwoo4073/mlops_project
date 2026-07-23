@@ -1,17 +1,20 @@
+import hashlib
+import json
+import re
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import joblib
-import pandas as pd
 import mlflow
 import mlflow.sklearn
-
+import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, f1_score, classification_report
+from sklearn.pipeline import Pipeline
 
 
 # 프로젝트 루트를 import path에 추가
@@ -22,19 +25,251 @@ from src.common.db import get_engine
 
 MODEL_PATH = "models/job_classifier.pkl"
 
+def build_training_dataset_profile(df) -> dict[str, Any]:
+    row_count = len(df)
+
+    profile: dict[str, Any] = {
+        "row_count": row_count,
+        "columns": list(df.columns),
+    }
+
+    if "job_category" in df.columns:
+        profile["category_distribution"] = (
+            df["job_category"]
+            .fillna("NULL")
+            .value_counts()
+            .sort_index()
+            .to_dict()
+        )
+
+    if "source" in df.columns:
+        profile["source_distribution"] = (
+            df["source"]
+            .fillna("NULL")
+            .value_counts()
+            .sort_index()
+            .to_dict()
+        )
+
+    if "text_for_model" in df.columns:
+        text_lengths = df["text_for_model"].fillna("").astype(str).str.len()
+
+        profile["text_stats"] = {
+            "empty_text_count": int((text_lengths == 0).sum()),
+            "avg_text_length": float(round(text_lengths.mean(), 2)) if row_count > 0 else 0.0,
+            "min_text_length": int(text_lengths.min()) if row_count > 0 else 0,
+            "max_text_length": int(text_lengths.max()) if row_count > 0 else 0,
+        }
+
+    return profile
+
+
+def calculate_training_dataset_hash(df) -> str:
+    hash_columns = [
+        column
+        for column in [
+            "raw_id",
+            "source",
+            "text_for_model",
+            "job_category",
+        ]
+        if column in df.columns
+    ]
+
+    if not hash_columns:
+        hash_columns = list(df.columns)
+
+    normalized_df = (
+        df[hash_columns]
+        .fillna("")
+        .astype(str)
+        .sort_values(hash_columns)
+        .reset_index(drop=True)
+    )
+
+    payload = normalized_df.to_json(
+        orient="records",
+        force_ascii=False,
+    )
+
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def log_training_dataset_to_mlflow(df) -> None:
+    dataset_profile = build_training_dataset_profile(df)
+    dataset_hash = calculate_training_dataset_hash(df)
+
+    mlflow.log_param("training_dataset_name", "cleaned_job_posts")
+    mlflow.log_param("training_dataset_source", "postgresql://jobskill/cleaned_job_posts")
+    mlflow.log_param("training_dataset_row_count", dataset_profile["row_count"])
+    mlflow.log_param("training_dataset_hash", dataset_hash)
+
+    if "category_distribution" in dataset_profile:
+        for category, count in dataset_profile["category_distribution"].items():
+            safe_category = str(category).replace(" ", "_").replace("/", "_")
+            mlflow.log_metric(
+                f"training_dataset_category_count_{safe_category}",
+                count,
+            )
+
+    if "source_distribution" in dataset_profile:
+        for source, count in dataset_profile["source_distribution"].items():
+            safe_source = str(source).replace(" ", "_").replace("/", "_")
+            mlflow.log_metric(
+                f"training_dataset_source_count_{safe_source}",
+                count,
+            )
+
+    text_stats = dataset_profile.get("text_stats", {})
+    for metric_name, metric_value in text_stats.items():
+        mlflow.log_metric(f"training_dataset_{metric_name}", metric_value)
+
+    mlflow.log_text(
+        json.dumps(dataset_profile, ensure_ascii=False, indent=2),
+        artifact_file="training_dataset_profile.json",
+    )
+
+    try:
+        from mlflow.data import from_pandas
+
+        dataset = from_pandas(
+            df,
+            source="postgresql://jobskill/cleaned_job_posts",
+            name="cleaned_job_posts",
+            targets="job_category" if "job_category" in df.columns else None,
+        )
+
+        mlflow.log_input(dataset, context="training")
+        mlflow.set_tag("training_dataset_logged_with", "mlflow.log_input")
+    except Exception as exc:
+        mlflow.set_tag("training_dataset_logged_with", "params_artifact_fallback")
+        mlflow.set_tag("training_dataset_log_input_error", str(exc)[:250])
+
+def sanitize_metric_name(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", str(value).strip())
+    sanitized = sanitized.strip("_")
+
+    return sanitized or "unknown"
+
+
+def log_model_evaluation_artifacts_to_mlflow(y_test, preds) -> None:
+    labels = sorted(
+        pd.Series(list(y_test) + list(preds))
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    report_dict = classification_report(
+        y_test,
+        preds,
+        labels=labels,
+        output_dict=True,
+        zero_division=0,
+    )
+
+    report_text = classification_report(
+        y_test,
+        preds,
+        labels=labels,
+        zero_division=0,
+    )
+
+    report_df = (
+        pd.DataFrame(report_dict)
+        .transpose()
+        .reset_index()
+        .rename(columns={"index": "label"})
+    )
+
+    matrix = confusion_matrix(
+        y_test,
+        preds,
+        labels=labels,
+    )
+
+    confusion_matrix_df = pd.DataFrame(
+        matrix,
+        index=labels,
+        columns=labels,
+    )
+    confusion_matrix_df.index.name = "actual"
+
+    evaluation_distribution = {
+        "labels": labels,
+        "actual_distribution": {
+            str(key): int(value)
+            for key, value in pd.Series(y_test).value_counts().sort_index().items()
+        },
+        "predicted_distribution": {
+            str(key): int(value)
+            for key, value in pd.Series(preds).value_counts().sort_index().items()
+        },
+    }
+
+    mlflow.log_text(
+        json.dumps(report_dict, ensure_ascii=False, indent=2),
+        artifact_file="evaluation/classification_report.json",
+    )
+
+    mlflow.log_text(
+        report_df.to_csv(index=False),
+        artifact_file="evaluation/classification_report.csv",
+    )
+
+    mlflow.log_text(
+        confusion_matrix_df.to_csv(),
+        artifact_file="evaluation/confusion_matrix.csv",
+    )
+
+    mlflow.log_text(
+        json.dumps(evaluation_distribution, ensure_ascii=False, indent=2),
+        artifact_file="evaluation/evaluation_distribution.json",
+    )
+
+    mlflow.log_text(
+        report_text,
+        artifact_file="evaluation/classification_report.txt",
+    )
+
+    for label in labels:
+        label_report = report_dict.get(label, {})
+        safe_label = sanitize_metric_name(label)
+
+        mlflow.log_metric(
+            f"eval_precision_{safe_label}",
+            float(label_report.get("precision", 0.0)),
+        )
+        mlflow.log_metric(
+            f"eval_recall_{safe_label}",
+            float(label_report.get("recall", 0.0)),
+        )
+        mlflow.log_metric(
+            f"eval_f1_{safe_label}",
+            float(label_report.get("f1-score", 0.0)),
+        )
+        mlflow.log_metric(
+            f"eval_support_{safe_label}",
+            float(label_report.get("support", 0.0)),
+        )
 
 def main():
     engine = get_engine()
 
     query = """
         SELECT
-            id,
-            text_for_model,
-            job_category
-        FROM cleaned_job_posts
-        WHERE job_category IS NOT NULL
-          AND job_category != 'Unknown'
-          AND text_for_model IS NOT NULL
+            c.id,
+            c.raw_id,
+            COALESCE(r.source, 'unknown') AS source,
+            c.text_for_model,
+            c.job_category
+        FROM cleaned_job_posts c
+        LEFT JOIN raw_job_posts r
+        ON c.raw_id = r.id
+        WHERE c.job_category IS NOT NULL
+        AND c.job_category != 'Unknown'
+        AND c.text_for_model IS NOT NULL
     """
 
     df = pd.read_sql(query, engine)
@@ -156,6 +391,8 @@ def main():
     mlflow.set_experiment(experiment_name)
 
     with mlflow.start_run():
+        log_training_dataset_to_mlflow(df)
+
         model.fit(X_train, y_train)
 
         preds = model.predict(X_test)
@@ -179,11 +416,13 @@ def main():
             ",".join(rare_classes.index.tolist()) if not rare_classes.empty else "",
         )
 
-        mlflow.log_metric("training_rows_before_filtering", len(class_counts.index) and int(class_counts.sum()))
+        mlflow.log_metric("training_rows_before_filtering", int(class_counts.sum()))
         mlflow.log_metric("training_rows", len(df))
         mlflow.log_metric("num_classes", num_classes)
         mlflow.log_metric("accuracy", acc)
         mlflow.log_metric("f1_weighted", f1)
+
+        log_model_evaluation_artifacts_to_mlflow(y_test, preds)
 
         mlflow.sklearn.log_model(model, "model")
 
