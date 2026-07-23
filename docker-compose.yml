@@ -188,6 +188,9 @@ services:
       - "8501:8501"
     volumes:
       - ./src:/opt/airflow/project/src
+      - ./reports:/opt/airflow/project/reports
+      - ./models:/opt/airflow/project/models
+      - ./mlartifacts:/opt/airflow/project/mlartifacts
     depends_on:
       postgres:
         condition: service_healthy

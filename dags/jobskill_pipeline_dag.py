@@ -84,8 +84,20 @@ def run_check_model_performance():
     main()
 
 
+def run_check_model_class_performance():
+    from src.quality.check_model_class_performance import main
+
+    main()
+
+
 def run_promote_model():
     from src.training.promote_model import main
+
+    main()
+
+
+def run_generate_model_card():
+    from src.reporting.generate_model_card import main
 
     main()
 
@@ -173,9 +185,19 @@ with DAG(
         python_callable=run_check_model_performance,
     )
 
+    check_model_class_performance = PythonOperator(
+        task_id="check_model_class_performance",
+        python_callable=run_check_model_class_performance,
+    )
+
     promote_model = PythonOperator(
         task_id="promote_model",
         python_callable=run_promote_model,
+    )
+
+    generate_model_card = PythonOperator(
+        task_id="generate_model_card",
+        python_callable=run_generate_model_card,
     )
 
     batch_inference = PythonOperator(
@@ -215,7 +237,9 @@ with DAG(
         >> check_training_data
         >> train_model
         >> check_model_performance
+        >> check_model_class_performance
         >> promote_model
+        >> generate_model_card
         >> batch_inference
         >> check_prediction_quality
         >> check_prediction_drift

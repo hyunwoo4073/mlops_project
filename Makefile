@@ -1,8 +1,8 @@
 .PHONY: help build up down restart ps logs \
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        lint test test-container ci smoke data-contract-check alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
-        report incident-report model-archive model-rollback-plan model-rollback model-lifecycle-check notify api-sample cleanup drift-check metrics \
+        lint test test-container ci smoke data-contract-check model-class-performance-check alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
+        report incident-report model-archive model-card model-rollback-plan model-rollback model-lifecycle-check notify api-sample cleanup drift-check metrics \
         prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
@@ -41,6 +41,7 @@ help:
 	@echo "  make ci                     Run lint and pytest"
 	@echo "  make smoke                  Run service smoke checks"
 	@echo "  make data-contract-check    Validate raw/cleaned data contract"
+	@echo "  make model-class-performance-check Validate class-level model performance"
 	@echo "  make alert-workflow-check   Run alert workflow smoke check"
 	@echo "  make runbook-check          Validate alert runbook coverage"
 	@echo "  make metrics-contract-check Validate required Prometheus metrics"
@@ -53,6 +54,7 @@ help:
 	@echo "  make report                 Generate pipeline report"
 	@echo "  make incident-report        Generate incident response report"
 	@echo "  make model-archive          Archive current promoted model"
+	@echo "  make model-card             Generate promoted model card report"
 	@echo "  make model-rollback-plan    Show promoted model rollback plan"
 	@echo "  make model-rollback         Roll back to archived promoted model"
 	@echo "  make model-lifecycle-check Validate model registry, archive and rollback integrity"
@@ -162,6 +164,9 @@ smoke:
 data-contract-check:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_data_contract.py"
 
+model-class-performance-check:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_model_class_performance.py"
+
 alert-workflow-check:
 	bash scripts/check_alert_workflow.sh
 
@@ -188,6 +193,9 @@ incident-report:
 
 model-archive:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/archive_promoted_model.py"
+
+model-card:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_model_card.py"
 
 model-rollback-plan:
 	docker compose exec \

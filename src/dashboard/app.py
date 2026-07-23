@@ -17,6 +17,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.reporting.generate_incident_response_report import build_report
 
 INCIDENT_REPORT_PATH = PROJECT_ROOT / "reports" / "latest_incident_response_report.md"
+MODEL_CARD_PATH = PROJECT_ROOT / "reports" / "latest_model_card.md"
+
 
 def get_database_url() -> str:
     db_host = os.getenv("DB_HOST", "localhost")
@@ -547,6 +549,7 @@ def render_alert_maintenance_mode_section() -> None:
         "Prometheus suppresses non-critical alert rules when this value is 1."
     )
 
+
 def fetch_current_alert_states() -> pd.DataFrame:
     return read_sql(
         """
@@ -606,6 +609,7 @@ def fetch_current_alert_states() -> pd.DataFrame:
             updated_at DESC
         """
     )
+
 
 def get_alert_link_column_config() -> dict:
     return {
@@ -1445,6 +1449,7 @@ def render_current_alerts_section() -> None:
         column_config=alert_column_config,
     )
 
+
 def fetch_alert_response_metrics() -> pd.DataFrame:
     return read_sql(
         """
@@ -1523,6 +1528,7 @@ def fetch_alert_response_metrics() -> pd.DataFrame:
         ORDER BY latest_fired_at DESC
         """
     )
+
 
 def fetch_recent_alert_response_details(limit: int = 50) -> pd.DataFrame:
     return read_sql(
@@ -1609,6 +1615,131 @@ def fetch_recent_alert_response_details(limit: int = 50) -> pd.DataFrame:
         params={"limit": limit},
     )
 
+
+def fetch_latest_model_class_performance_checks():
+    query = """
+        WITH latest_group AS (
+            SELECT
+                COALESCE(run_id, 'manual') AS run_key,
+                MAX(checked_at) AS latest_checked_at
+            FROM pipeline_check_results
+            WHERE check_type = 'MODEL_CLASS_PERFORMANCE'
+            GROUP BY COALESCE(run_id, 'manual')
+            ORDER BY latest_checked_at DESC
+            LIMIT 1
+        )
+        SELECT
+            p.check_type,
+            p.check_name,
+            p.status,
+            ROUND(p.metric_value::numeric, 4) AS metric_value,
+            ROUND(p.threshold_value::numeric, 4) AS threshold_value,
+            p.message,
+            p.dag_id,
+            p.task_id,
+            p.run_id,
+            p.checked_at
+        FROM pipeline_check_results p
+        JOIN latest_group l
+          ON COALESCE(p.run_id, 'manual') = l.run_key
+        WHERE p.check_type = 'MODEL_CLASS_PERFORMANCE'
+          AND p.checked_at >= l.latest_checked_at - INTERVAL '10 minutes'
+        ORDER BY p.checked_at DESC, p.check_name
+    """
+
+    return read_sql(query)
+
+
+def build_class_performance_summary(checks_df):
+    if checks_df.empty:
+        return checks_df
+
+    rows = []
+
+    for _, row in checks_df.iterrows():
+        check_name = str(row.get("check_name", ""))
+
+        if "." not in check_name:
+            continue
+
+        label_key, metric_name = check_name.rsplit(".", 1)
+
+        if metric_name not in {"support", "recall", "f1"}:
+            continue
+
+        rows.append(
+            {
+                "label": label_key.replace("_", " "),
+                "metric": metric_name,
+                "status": row.get("status"),
+                "metric_value": row.get("metric_value"),
+                "threshold_value": row.get("threshold_value"),
+                "message": row.get("message"),
+                "checked_at": row.get("checked_at"),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    metric_df = pd.DataFrame(rows)
+
+    value_pivot = (
+        metric_df.pivot_table(
+            index="label",
+            columns="metric",
+            values="metric_value",
+            aggfunc="last",
+        )
+        .reset_index()
+    )
+
+    threshold_pivot = (
+        metric_df.pivot_table(
+            index="label",
+            columns="metric",
+            values="threshold_value",
+            aggfunc="last",
+        )
+        .reset_index()
+        .rename(
+            columns={
+                "support": "support_threshold",
+                "recall": "recall_threshold",
+                "f1": "f1_threshold",
+            }
+        )
+    )
+
+    status_summary = (
+        metric_df.groupby("label")["status"]
+        .apply(lambda values: "FAIL" if "FAIL" in set(values) else "PASS")
+        .reset_index()
+        .rename(columns={"status": "overall_status"})
+    )
+
+    result = value_pivot.merge(threshold_pivot, on="label", how="left")
+    result = result.merge(status_summary, on="label", how="left")
+
+    preferred_columns = [
+        "label",
+        "overall_status",
+        "support",
+        "support_threshold",
+        "recall",
+        "recall_threshold",
+        "f1",
+        "f1_threshold",
+    ]
+
+    existing_columns = [column for column in preferred_columns if column in result.columns]
+
+    return result[existing_columns].sort_values(
+        by=["overall_status", "label"],
+        ascending=[True, True],
+    )
+
+
 def render_alert_response_metrics() -> None:
     st.subheader("Alert Response Metrics")
 
@@ -1675,6 +1806,7 @@ def render_alert_response_metrics() -> None:
             use_container_width=True,
             hide_index=True,
         )
+
 
 def render_alert_history_section() -> None:
     st.header("Alert History")
@@ -1753,6 +1885,7 @@ def render_alert_history_section() -> None:
         column_config=get_alert_link_column_config(),
     )
 
+
 def generate_incident_report_from_dashboard() -> str:
     INCIDENT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1767,6 +1900,30 @@ def read_incident_report() -> str | None:
         return None
 
     return INCIDENT_REPORT_PATH.read_text(encoding="utf-8")
+
+
+def generate_model_card_from_dashboard() -> str | None:
+    from src.reporting.generate_model_card import main as generate_model_card_main
+
+    generate_model_card_main()
+
+    return read_model_card()
+
+
+def read_model_card() -> str | None:
+    if not MODEL_CARD_PATH.exists():
+        return None
+
+    return MODEL_CARD_PATH.read_text(encoding="utf-8")
+
+
+def get_model_card_updated_at() -> str:
+    if not MODEL_CARD_PATH.exists():
+        return "-"
+
+    updated_at = MODEL_CARD_PATH.stat().st_mtime
+
+    return pd.to_datetime(updated_at, unit="s").strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_incident_report_updated_at() -> str:
@@ -1831,6 +1988,61 @@ def render_incident_report_section() -> None:
     st.subheader("Report Preview")
 
     st.markdown(report)
+
+
+def render_model_card_section() -> None:
+    st.header("Model Card")
+
+    st.caption(
+        "현재 PROMOTED 모델의 성능, 학습 데이터, MLflow run, archive/rollback 정보를 "
+        "Markdown Model Card로 조회합니다."
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    model_card_exists = MODEL_CARD_PATH.exists()
+    model_card_updated_at = get_model_card_updated_at()
+
+    col1.metric("Model Card file", "Exists" if model_card_exists else "Not found")
+    col2.metric("Updated at", model_card_updated_at)
+    col3.metric("Path", str(MODEL_CARD_PATH.relative_to(PROJECT_ROOT)))
+
+    button_col1, button_col2 = st.columns([1, 3])
+
+    with button_col1:
+        generate_clicked = st.button(
+            "Generate model card",
+            type="primary",
+        )
+
+    if generate_clicked:
+        try:
+            model_card = generate_model_card_from_dashboard()
+            st.success("Model card generated.")
+        except Exception as exc:
+            st.error(f"Model card 생성 실패: {exc}")
+            return
+    else:
+        model_card = read_model_card()
+
+    if model_card is None:
+        st.info("아직 생성된 Model Card가 없습니다.")
+        st.code(
+            "make model-card",
+            language="bash",
+        )
+        return
+
+    st.download_button(
+        label="Download Markdown model card",
+        data=model_card,
+        file_name="latest_model_card.md",
+        mime="text/markdown",
+    )
+
+    st.subheader("Model Card Preview")
+
+    st.markdown(model_card)
 
 
 def render_model_lifecycle_section() -> None:
@@ -1969,6 +2181,89 @@ curl -fsS http://localhost:8000/ready | jq""",
         st.dataframe(rollback_df, use_container_width=True, hide_index=True)
 
 
+def render_model_evaluation_section():
+    st.subheader("Model Evaluation")
+
+    st.caption(
+        "Class-level model performance gate results based on MLflow evaluation metrics."
+    )
+
+    checks_df = fetch_latest_model_class_performance_checks()
+
+    if checks_df.empty:
+        st.info(
+            "No MODEL_CLASS_PERFORMANCE check results found. "
+            "Run `make model-class-performance-check` or execute the Airflow DAG after training."
+        )
+        return
+
+    latest_checked_at = checks_df["checked_at"].max()
+    latest_run_id = checks_df["run_id"].dropna().iloc[0] if checks_df["run_id"].notna().any() else "manual"
+
+    total_checks = len(checks_df)
+    failed_checks = int((checks_df["status"] == "FAIL").sum())
+    passed_checks = int((checks_df["status"] == "PASS").sum())
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Latest check time", str(latest_checked_at))
+    col2.metric("Run", str(latest_run_id))
+    col3.metric("Passed checks", passed_checks)
+    col4.metric("Failed checks", failed_checks)
+
+    summary_df = build_class_performance_summary(checks_df)
+
+    st.markdown("### Class-level performance summary")
+
+    if summary_df.empty:
+        st.warning("Class-level summary could not be built from the latest check results.")
+    else:
+        st.dataframe(
+            summary_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if "overall_status" in summary_df.columns:
+            status_counts = summary_df["overall_status"].value_counts().reset_index()
+            status_counts.columns = ["status", "count"]
+
+            st.markdown("### Class gate status distribution")
+            st.bar_chart(
+                status_counts,
+                x="status",
+                y="count",
+                use_container_width=True,
+            )
+
+        if "f1" in summary_df.columns:
+            st.markdown("### F1 score by class")
+            f1_chart_df = summary_df[["label", "f1"]].dropna()
+            st.bar_chart(
+                f1_chart_df,
+                x="label",
+                y="f1",
+                use_container_width=True,
+            )
+
+        if "recall" in summary_df.columns:
+            st.markdown("### Recall by class")
+            recall_chart_df = summary_df[["label", "recall"]].dropna()
+            st.bar_chart(
+                recall_chart_df,
+                x="label",
+                y="recall",
+                use_container_width=True,
+            )
+
+    st.markdown("### Raw class performance check results")
+    st.dataframe(
+        checks_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def main():
     st.set_page_config(
         page_title="JobSkill MLOps Dashboard",
@@ -1984,9 +2279,11 @@ def main():
 
     render_metric_cards()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(
         [
             "Model Lifecycle",
+            "Model Evaluation",
+            "Model Card",
             "Data Quality",
             "Prediction Quality",
             "Pipeline Checks",
@@ -2002,27 +2299,33 @@ def main():
         render_model_lifecycle_section()
 
     with tab2:
-        render_source_quality()
+        render_model_evaluation_section()
 
     with tab3:
-        render_prediction_quality()
+        render_model_card_section()
 
     with tab4:
-        render_pipeline_checks()
+        render_source_quality()
 
     with tab5:
-        render_api_logs()
+        render_prediction_quality()
 
     with tab6:
-        render_current_alerts_section()
+        render_pipeline_checks()
 
     with tab7:
-        render_alert_history_section()
+        render_api_logs()
 
     with tab8:
-        render_incident_report_section()
+        render_current_alerts_section()
 
     with tab9:
+        render_alert_history_section()
+
+    with tab10:
+        render_incident_report_section()
+
+    with tab11:
         render_recent_predictions()
 
 if __name__ == "__main__":
