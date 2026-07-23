@@ -73,3 +73,6 @@ airflow_logs/
 reports/
 !reports/.gitkeep
 .secrets/
+
+# MLflow artifacts
+mlartifacts/
