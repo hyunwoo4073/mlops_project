@@ -102,6 +102,12 @@ def run_generate_model_card():
     main()
 
 
+def run_check_model_card_consistency():
+    from scripts.check_model_card_consistency import main
+
+    main()
+
+
 def run_batch_inference():
     from src.inference.batch_inference import main
 
@@ -200,6 +206,11 @@ with DAG(
         python_callable=run_generate_model_card,
     )
 
+    check_model_card_consistency = PythonOperator(
+        task_id="check_model_card_consistency",
+        python_callable=run_check_model_card_consistency,
+    )
+
     batch_inference = PythonOperator(
         task_id="batch_inference",
         python_callable=run_batch_inference,
@@ -240,6 +251,7 @@ with DAG(
         >> check_model_class_performance
         >> promote_model
         >> generate_model_card
+        >> check_model_card_consistency
         >> batch_inference
         >> check_prediction_quality
         >> check_prediction_drift

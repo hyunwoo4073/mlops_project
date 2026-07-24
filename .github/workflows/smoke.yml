@@ -84,6 +84,9 @@ jobs:
         run: |
           make ops-static-check
 
+      - name: Check repository artifacts
+        run: make repo-artifact-check
+
       - name: Start PostgreSQL
         run: |
           docker compose up -d postgres
