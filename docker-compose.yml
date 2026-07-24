@@ -6,7 +6,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
 
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@${AIRFLOW_DB_HOST}:${AIRFLOW_DB_PORT}/${AIRFLOW_DB_NAME}
 
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
     AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
@@ -121,8 +121,8 @@ services:
       - -c
       - |
         mlflow ui \
-          --backend-store-uri postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${MLFLOW_DB_NAME} \
-          --default-artifact-root /opt/airflow/project/mlartifacts \
+          --backend-store-uri ${MLFLOW_TRACKING_URI} \
+          --default-artifact-root ${MLFLOW_ARTIFACT_ROOT} \
           --host 0.0.0.0 \
           --port 5000
     ports:
@@ -132,6 +132,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
 
   api:
     build:
@@ -143,8 +144,8 @@ services:
       - .env
     environment:
       PYTHONPATH: /app
-      DB_HOST: postgres
-      DB_PORT: 5432
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -164,6 +165,7 @@ services:
       postgres:
         condition: service_healthy
 
+
   dashboard:
     image: jobskill-airflow:3.2.2
     container_name: jobskill-dashboard
@@ -179,22 +181,26 @@ services:
           --server.port 8501
     environment:
       PYTHONPATH: /opt/airflow/project
-      DB_HOST: postgres
-      DB_PORT: 5432
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
+      MLFLOW_ARTIFACT_ROOT: ${MLFLOW_ARTIFACT_ROOT}
     ports:
       - "8501:8501"
     volumes:
       - ./src:/opt/airflow/project/src
+      - ./scripts:/opt/airflow/project/scripts
       - ./reports:/opt/airflow/project/reports
       - ./models:/opt/airflow/project/models
       - ./mlartifacts:/opt/airflow/project/mlartifacts
     depends_on:
       postgres:
         condition: service_healthy
-  
+
+
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: jobskill-prometheus
@@ -216,6 +222,7 @@ services:
       alertmanager:
         condition: service_started
 
+
   grafana:
     image: grafana/grafana:11.3.0
     container_name: jobskill-grafana
@@ -233,6 +240,7 @@ services:
       prometheus:
         condition: service_started
 
+
   alertmanager:
     image: prom/alertmanager:v0.27.0
     container_name: jobskill-alertmanager
@@ -249,6 +257,7 @@ services:
     depends_on:
       api:
         condition: service_started
+
 
 volumes:
   jobskill_pgdata:

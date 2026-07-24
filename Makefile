@@ -1,8 +1,8 @@
 .PHONY: help build up down restart ps logs \
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
-        lint test test-container ci smoke data-contract-check model-class-performance-check alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check \
-        report incident-report model-archive model-card model-rollback-plan model-rollback model-lifecycle-check notify api-sample cleanup drift-check metrics \
+        lint test test-container ci smoke data-contract-check model-class-performance-check alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check repo-artifact-check \
+        report incident-report model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check notify api-sample cleanup drift-check metrics \
         prometheus prometheus-logs prometheus-check prometheus-rule-test \
         alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
@@ -49,12 +49,14 @@ help:
 	@echo "  make ops-static-check       Run static ops validation checks"
 	@echo "  make ops-check              Run full local ops validation checks"
 	@echo "  make drift-check            Run prediction distribution drift check"
+	@echo "  make repo-artifact-check    Check generated/runtime artifacts are not committed"
 	@echo ""
 	@echo "Reports / Apps"
 	@echo "  make report                 Generate pipeline report"
 	@echo "  make incident-report        Generate incident response report"
 	@echo "  make model-archive          Archive current promoted model"
 	@echo "  make model-card             Generate promoted model card report"
+	@echo "  make model-card-check      Validate latest Model Card consistency"
 	@echo "  make model-rollback-plan    Show promoted model rollback plan"
 	@echo "  make model-rollback         Roll back to archived promoted model"
 	@echo "  make model-lifecycle-check Validate model registry, archive and rollback integrity"
@@ -197,6 +199,9 @@ model-archive:
 model-card:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/reporting/generate_model_card.py"
 
+model-card-check:
+	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python scripts/check_model_card_consistency.py"
+
 model-rollback-plan:
 	docker compose exec \
 		-e MODEL_ROLLBACK_ARCHIVE_ID="$${MODEL_ROLLBACK_ARCHIVE_ID:-}" \
@@ -244,6 +249,9 @@ cleanup:
 
 drift-check:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_prediction_drift.py"
+
+repo-artifact-check:
+	./scripts/check_repository_artifacts.sh
 
 metrics:
 	curl -s http://localhost:8000/metrics | head -80

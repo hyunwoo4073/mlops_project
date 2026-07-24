@@ -134,12 +134,20 @@ check_command \
   make model-lifecycle-check  
 
 check_command \
+  "Model Card consistency" \
+  make model-card-check
+
+check_command \
   "Service smoke check" \
   bash scripts/smoke_check.sh
 
 check_command \
   "Alert workflow smoke check" \
   bash scripts/check_alert_workflow.sh
+
+check_command \
+  "Repository artifact guard" \
+  make repo-artifact-check
 
 echo ""
 echo "========================================"
