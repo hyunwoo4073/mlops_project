@@ -56,6 +56,14 @@ def _add_metric(
     lines.append(f"# HELP {name} {help_text}")
     lines.append(f"# TYPE {name} {metric_type}")
 
+    if not values:
+        # Keep required metrics visible even when the backing query returns no rows.
+        # This makes metrics contract checks stable after DB reset or before alerts/API
+        # events have been generated.
+        lines.append(_metric_line(name, 0))
+        lines.append("")
+        return
+
     for labels, value in values:
         lines.append(_metric_line(name, value, labels))
 

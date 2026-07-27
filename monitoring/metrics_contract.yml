@@ -35,3 +35,9 @@ required_metrics:
 
   # Alert control metrics
   - jobskill_alert_maintenance_mode
+
+external_metrics:
+  alertmanager:
+    url: http://localhost:9093/metrics
+    required_metrics:
+      - alertmanager_notifications_failed_total

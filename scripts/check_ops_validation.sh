@@ -90,12 +90,20 @@ check_command \
   make prometheus-check
 
 check_command \
+  "Prometheus external target check" \
+  make prometheus-external-target-check
+
+check_command \
   "Prometheus alert rule unit tests" \
   make prometheus-rule-test
 
 check_command \
   "Alertmanager config" \
   make alertmanager-check
+
+check_command \
+  "Notification channel health check" \
+  make notification-check
 
 check_url \
   "FastAPI health" \

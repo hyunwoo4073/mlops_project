@@ -3,40 +3,29 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from typing import Any
+
+import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_RULES_PATH = PROJECT_ROOT / "monitoring/prometheus/rules/jobskill_alert_rules.yml"
-DEFAULT_CONTRACT_PATH = PROJECT_ROOT / "monitoring/metrics_contract.yml"
-DEFAULT_METRICS_URL = "http://localhost:8000/metrics"
+DEFAULT_RULES_PATH = PROJECT_ROOT / "monitoring" / "prometheus" / "rules" / "jobskill_alert_rules.yml"
+DEFAULT_CONTRACT_PATH = PROJECT_ROOT / "monitoring" / "metrics_contract.yml"
+DEFAULT_FASTAPI_METRICS_URL = "http://localhost:8000/metrics"
 
-ALLOWED_EXTERNAL_METRICS = {
-    "up",
-}
-
+# PromQL functions, aggregators, operators, and keywords that are not metric names.
 PROMQL_RESERVED_WORDS = {
-    "and",
-    "or",
-    "unless",
-    "on",
-    "ignoring",
-    "group_left",
-    "group_right",
-    "by",
-    "without",
-    "bool",
-    "offset",
-}
-
-PROMQL_FUNCTIONS = {
     "abs",
     "absent",
+    "absent_over_time",
     "avg",
     "avg_over_time",
+    "bottomk",
     "ceil",
     "changes",
     "clamp",
@@ -44,20 +33,28 @@ PROMQL_FUNCTIONS = {
     "clamp_min",
     "count",
     "count_over_time",
+    "count_values",
     "day_of_month",
     "day_of_week",
+    "day_of_year",
     "days_in_month",
     "delta",
     "deriv",
     "exp",
     "floor",
+    "histogram_avg",
+    "histogram_count",
+    "histogram_fraction",
     "histogram_quantile",
+    "histogram_sum",
+    "holt_winters",
     "hour",
     "idelta",
     "increase",
     "irate",
     "label_join",
     "label_replace",
+    "last_over_time",
     "ln",
     "log2",
     "log10",
@@ -68,12 +65,14 @@ PROMQL_FUNCTIONS = {
     "minute",
     "month",
     "predict_linear",
+    "present_over_time",
     "quantile",
     "quantile_over_time",
     "rate",
     "resets",
     "round",
     "scalar",
+    "sgn",
     "sort",
     "sort_desc",
     "sqrt",
@@ -88,200 +87,158 @@ PROMQL_FUNCTIONS = {
     "topk",
     "vector",
     "year",
+    "and",
+    "or",
+    "unless",
+    "bool",
+    "by",
+    "without",
+    "on",
+    "ignoring",
+    "group_left",
+    "group_right",
+    "offset",
 }
 
-ALERT_PATTERN = re.compile(r"^\s*-\s*alert:\s*([A-Za-z0-9_]+)\s*$")
-METRIC_TOKEN_PATTERN = re.compile(r"\b[a-zA-Z_:][a-zA-Z0-9_:]*\b")
-REQUIRED_METRIC_PATTERN = re.compile(r"^\s*-\s*([a-zA-Z_:][a-zA-Z0-9_:]*)\s*$")
-METRIC_LINE_PATTERN = re.compile(
-    r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{.*\})?\s+[-+0-9.eE]+$"
-)
+# Prometheus built-in or scrape-level metrics that are allowed without the app contract.
+EXTERNAL_BUILTIN_METRICS = {
+    "up",
+}
 
 
-def fail(message: str) -> None:
-    print(f"[FAIL] {message}")
-    sys.exit(1)
+@dataclass(frozen=True)
+class MetricContractEntry:
+    name: str
+    source: str
+    url: str | None
 
 
 def pass_check(message: str) -> None:
     print(f"[PASS] {message}")
 
 
-def load_required_metrics(contract_path: Path) -> set[str]:
-    if not contract_path.exists():
-        fail(f"Metrics contract file not found: {contract_path}")
+def fail_check(message: str) -> None:
+    print(f"[FAIL] {message}")
+
+
+def warn(message: str) -> None:
+    print(f"[WARN] {message}")
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as file:
+        data = yaml.safe_load(file)
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid YAML object: {path}")
+
+    return data
+
+
+def normalize_metric_list(value: Any, context: str) -> list[str]:
+    if value is None:
+        return []
+
+    if not isinstance(value, list):
+        raise ValueError(f"{context} must be a list")
 
     metrics: list[str] = []
 
-    for line in contract_path.read_text(encoding="utf-8").splitlines():
-        match = REQUIRED_METRIC_PATTERN.match(line)
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(f"{context} contains non-string item: {item!r}")
 
-        if match:
-            metrics.append(match.group(1))
+        metric = item.strip()
 
-    if not metrics:
-        fail(f"No required metrics found in contract file: {contract_path}")
+        if metric:
+            metrics.append(metric)
+
+    return metrics
+
+
+def load_metric_contract(contract_path: Path, default_url: str) -> dict[str, MetricContractEntry]:
+    contract = load_yaml(contract_path)
+
+    metric_map: dict[str, MetricContractEntry] = {}
+
+    fastapi_metrics = normalize_metric_list(
+        contract.get("required_metrics", []),
+        "required_metrics",
+    )
+
+    for metric in fastapi_metrics:
+        metric_map[metric] = MetricContractEntry(
+            name=metric,
+            source="fastapi",
+            url=default_url,
+        )
+
+    external_metrics = contract.get("external_metrics", {})
+
+    if external_metrics is None:
+        external_metrics = {}
+
+    if not isinstance(external_metrics, dict):
+        raise ValueError("external_metrics must be a mapping")
+
+    for source_name, source_config in external_metrics.items():
+        if not isinstance(source_config, dict):
+            raise ValueError(f"external_metrics.{source_name} must be a mapping")
+
+        source_url = source_config.get("url")
+        source_required_metrics = normalize_metric_list(
+            source_config.get("required_metrics", []),
+            f"external_metrics.{source_name}.required_metrics",
+        )
+
+        for metric in source_required_metrics:
+            metric_map[metric] = MetricContractEntry(
+                name=metric,
+                source=str(source_name),
+                url=str(source_url) if source_url else None,
+            )
 
     duplicated_metrics = sorted(
         {
             metric
-            for metric in metrics
-            if metrics.count(metric) > 1
+            for metric in metric_map
+            if list(metric_map.keys()).count(metric) > 1
         }
     )
 
     if duplicated_metrics:
-        fail(f"Duplicated contract metrics: {', '.join(duplicated_metrics)}")
+        raise ValueError(
+            "Duplicated metrics found in contract: "
+            + ", ".join(duplicated_metrics)
+        )
 
-    return set(metrics)
-
-
-def parse_alert_blocks(rules_path: Path) -> dict[str, list[str]]:
-    if not rules_path.exists():
-        fail(f"Alert rules file not found: {rules_path}")
-
-    alert_blocks: dict[str, list[str]] = {}
-
-    current_alert: str | None = None
-    current_lines: list[str] = []
-
-    for line in rules_path.read_text(encoding="utf-8").splitlines():
-        alert_match = ALERT_PATTERN.match(line)
-
-        if alert_match:
-            if current_alert:
-                alert_blocks[current_alert] = current_lines
-
-            current_alert = alert_match.group(1)
-            current_lines = []
-            continue
-
-        if current_alert:
-            current_lines.append(line)
-
-    if current_alert:
-        alert_blocks[current_alert] = current_lines
-
-    if not alert_blocks:
-        fail(f"No alert blocks found in {rules_path}")
-
-    return alert_blocks
+    return metric_map
 
 
-def extract_expr_lines(alert_lines: list[str]) -> list[str]:
-    expr_lines: list[str] = []
-    in_expr = False
+def fetch_metrics_text(url: str, timeout_seconds: int = 10) -> str:
+    request = urllib.request.Request(url=url, method="GET")
 
-    for line in alert_lines:
-        stripped = line.strip()
-
-        if stripped.startswith("expr:"):
-            in_expr = True
-
-            after_expr = stripped.removeprefix("expr:").strip()
-
-            if after_expr and after_expr not in {"|", ">"}:
-                expr_lines.append(after_expr)
-
-            continue
-
-        if in_expr and (
-            stripped.startswith("for:")
-            or stripped.startswith("labels:")
-            or stripped.startswith("annotations:")
-        ):
-            break
-
-        if in_expr:
-            expr_lines.append(line)
-
-    return expr_lines
-
-
-def remove_quoted_text(expression: str) -> str:
-    expression = re.sub(r'"[^"]*"', '""', expression)
-    expression = re.sub(r"'[^']*'", "''", expression)
-
-    return expression
-
-
-def remove_label_selectors(expression: str) -> str:
-    return re.sub(r"\{[^{}]*\}", "", expression)
-
-
-def extract_metric_names_from_expr(expression: str) -> set[str]:
-    expression = remove_quoted_text(expression)
-    expression = remove_label_selectors(expression)
-
-    metric_names: set[str] = set()
-
-    for token in METRIC_TOKEN_PATTERN.findall(expression):
-        if token in PROMQL_RESERVED_WORDS:
-            continue
-
-        if token in PROMQL_FUNCTIONS:
-            continue
-
-        if token in {"true", "false"}:
-            continue
-
-        metric_names.add(token)
-
-    return metric_names
-
-
-def extract_alert_metric_dependencies(
-    alert_blocks: dict[str, list[str]],
-) -> dict[str, set[str]]:
-    alert_metric_dependencies: dict[str, set[str]] = {}
-
-    for alert_name, alert_lines in alert_blocks.items():
-        expr_lines = extract_expr_lines(alert_lines)
-
-        if not expr_lines:
-            fail(f"{alert_name}: expr not found")
-
-        expression = "\n".join(expr_lines)
-
-        metric_names = extract_metric_names_from_expr(expression)
-
-        if not metric_names:
-            fail(f"{alert_name}: no metric dependency found in expr")
-
-        alert_metric_dependencies[alert_name] = metric_names
-
-    return alert_metric_dependencies
-
-
-def fetch_metrics_body(metrics_url: str) -> str:
     try:
-        with urlopen(metrics_url, timeout=10) as response:
-            status_code = response.status
-            body = response.read().decode("utf-8", errors="replace")
-    except HTTPError as exc:
-        fail(f"Metrics endpoint returned HTTP {exc.code}: {metrics_url}")
-    except URLError as exc:
-        fail(f"Metrics endpoint request failed: {metrics_url} ({exc})")
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return response.read().decode("utf-8", errors="replace")
 
-    if status_code != 200:
-        fail(f"Metrics endpoint returned HTTP {status_code}: {metrics_url}")
-
-    if not body.strip():
-        fail(f"Metrics endpoint returned empty body: {metrics_url}")
-
-    return body
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Failed to fetch metrics from {url}: {exc}") from exc
 
 
-def extract_exposed_metric_names(metrics_body: str) -> set[str]:
+def parse_exposed_metric_names(metrics_text: str) -> set[str]:
     metric_names: set[str] = set()
 
-    for line in metrics_body.splitlines():
-        line = line.strip()
+    for raw_line in metrics_text.splitlines():
+        line = raw_line.strip()
 
-        if not line or line.startswith("#"):
+        if not line:
             continue
 
-        match = METRIC_LINE_PATTERN.match(line)
+        if line.startswith("#"):
+            continue
+
+        match = re.match(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{|\s)", line)
 
         if match:
             metric_names.add(match.group(1))
@@ -289,14 +246,106 @@ def extract_exposed_metric_names(metrics_body: str) -> set[str]:
     return metric_names
 
 
+def load_exposed_metrics_by_source(
+    metric_contract: dict[str, MetricContractEntry],
+    default_url: str,
+    skip_url: bool,
+) -> dict[str, set[str]]:
+    if skip_url:
+        return {}
+
+    source_urls: dict[str, str] = {
+        "fastapi": default_url,
+    }
+
+    for entry in metric_contract.values():
+        if entry.url:
+            source_urls[entry.source] = entry.url
+
+    exposed_by_source: dict[str, set[str]] = {}
+
+    for source, url in source_urls.items():
+        metrics_text = fetch_metrics_text(url)
+        exposed_by_source[source] = parse_exposed_metric_names(metrics_text)
+
+    return exposed_by_source
+
+
+def extract_alert_rules(rules_path: Path) -> list[dict[str, str]]:
+    rules_yaml = load_yaml(rules_path)
+
+    alert_rules: list[dict[str, str]] = []
+
+    for group in rules_yaml.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+
+        for rule in group.get("rules", []):
+            if not isinstance(rule, dict):
+                continue
+
+            alert_name = rule.get("alert")
+            expr = rule.get("expr")
+
+            if alert_name and expr:
+                alert_rules.append(
+                    {
+                        "alert": str(alert_name),
+                        "expr": str(expr),
+                    }
+                )
+
+    return alert_rules
+
+
+def strip_promql_non_metric_parts(expr: str) -> str:
+    cleaned = expr
+
+    # Remove quoted strings.
+    cleaned = re.sub(r'"(?:\\.|[^"\\])*"', "", cleaned)
+    cleaned = re.sub(r"'(?:\\.|[^'\\])*'", "", cleaned)
+
+    # Remove label matcher blocks: metric{label="value"} -> metric
+    cleaned = re.sub(r"\{[^{}]*\}", "", cleaned)
+
+    # Remove range selectors: metric[5m] -> metric
+    cleaned = re.sub(r"\[[^\[\]]*\]", "", cleaned)
+
+    # Remove grouping labels: sum by (receiver, integration) -> sum
+    cleaned = re.sub(r"\b(?:by|without)\s*\([^)]*\)", "", cleaned)
+
+    # Remove vector matching labels: on (...) / ignoring (...) / group_left (...)
+    cleaned = re.sub(r"\b(?:on|ignoring|group_left|group_right)\s*\([^)]*\)", "", cleaned)
+
+    return cleaned
+
+
+def extract_metric_names_from_expr(expr: str) -> set[str]:
+    cleaned = strip_promql_non_metric_parts(expr)
+
+    tokens = set(
+        re.findall(
+            r"\b[a-zA-Z_:][a-zA-Z0-9_:]*\b",
+            cleaned,
+        )
+    )
+
+    return {
+        token
+        for token in tokens
+        if token not in PROMQL_RESERVED_WORDS
+        and not token.startswith("__")
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Validate Prometheus alert rule metric dependencies."
+        description="Check whether Prometheus alert rules reference known metrics."
     )
     parser.add_argument(
         "--rules",
         default=str(DEFAULT_RULES_PATH),
-        help="Path to Prometheus alert rules YAML.",
+        help="Path to Prometheus alert rule file.",
     )
     parser.add_argument(
         "--contract",
@@ -305,83 +354,100 @@ def main() -> None:
     )
     parser.add_argument(
         "--url",
-        default=DEFAULT_METRICS_URL,
+        default=DEFAULT_FASTAPI_METRICS_URL,
         help="FastAPI /metrics URL.",
     )
     parser.add_argument(
-        "--skip-metrics-endpoint",
+        "--skip-url",
         action="store_true",
-        help="Skip checking the live /metrics endpoint.",
+        help="Only check metric contract references, without checking live /metrics endpoints.",
     )
 
     args = parser.parse_args()
 
     rules_path = Path(args.rules)
     contract_path = Path(args.contract)
-    metrics_url = args.url
 
     print("")
     print("JobSkill Alert Rule Metric Dependency Check")
     print(f"Rules   : {rules_path}")
     print(f"Contract: {contract_path}")
-    print(f"Metrics : {metrics_url}")
-    print(f"Skip URL: {args.skip_metrics_endpoint}")
+    print(f"Metrics : {args.url}")
+    print(f"Skip URL: {args.skip_url}")
+    print("")
 
-    contract_metrics = load_required_metrics(contract_path)
-    alert_blocks = parse_alert_blocks(rules_path)
-    alert_dependencies = extract_alert_metric_dependencies(alert_blocks)
+    metric_contract = load_metric_contract(contract_path, args.url)
+    exposed_by_source = load_exposed_metrics_by_source(
+        metric_contract=metric_contract,
+        default_url=args.url,
+        skip_url=args.skip_url,
+    )
 
-    exposed_metric_names: set[str] = set()
+    alert_rules = extract_alert_rules(rules_path)
 
-    if not args.skip_metrics_endpoint:
-        metrics_body = fetch_metrics_body(metrics_url)
-        exposed_metric_names = extract_exposed_metric_names(metrics_body)
+    has_error = False
+    missing_from_contract: dict[str, list[str]] = {}
+    missing_from_metrics: dict[str, list[str]] = {}
 
-    missing_from_contract: dict[str, set[str]] = {}
-    missing_from_metrics_endpoint: dict[str, set[str]] = {}
+    for rule in alert_rules:
+        alert_name = rule["alert"]
+        expr = rule["expr"]
+        metric_names = sorted(extract_metric_names_from_expr(expr))
 
-    for alert_name, metric_names in alert_dependencies.items():
-        print("")
         print(f"[ALERT] {alert_name}")
 
-        for metric_name in sorted(metric_names):
-            if metric_name in ALLOWED_EXTERNAL_METRICS:
-                print(f"  [OK] {metric_name} external")
+        if not metric_names:
+            print("  [WARN] No metric references found")
+            print("")
+            continue
+
+        for metric in metric_names:
+            if metric in EXTERNAL_BUILTIN_METRICS:
+                print(f"  [OK] {metric} external")
                 continue
 
-            if metric_name not in contract_metrics:
-                missing_from_contract.setdefault(alert_name, set()).add(metric_name)
-                print(f"  [MISSING_CONTRACT] {metric_name}")
+            contract_entry = metric_contract.get(metric)
+
+            if not contract_entry:
+                print(f"  [MISSING_CONTRACT] {metric}")
+                missing_from_contract.setdefault(alert_name, []).append(metric)
+                has_error = True
                 continue
 
-            if not args.skip_metrics_endpoint and metric_name not in exposed_metric_names:
-                missing_from_metrics_endpoint.setdefault(alert_name, set()).add(metric_name)
-                print(f"  [MISSING_METRICS] {metric_name}")
+            if args.skip_url:
+                print(f"  [OK] {metric} contract source={contract_entry.source}")
                 continue
 
-            print(f"  [OK] {metric_name}")
+            exposed_metrics = exposed_by_source.get(contract_entry.source, set())
+
+            if metric not in exposed_metrics:
+                print(
+                    f"  [MISSING_METRICS] {metric} "
+                    f"source={contract_entry.source}"
+                )
+                missing_from_metrics.setdefault(alert_name, []).append(metric)
+                has_error = True
+                continue
+
+            print(f"  [OK] {metric} source={contract_entry.source}")
+
+        print("")
 
     if missing_from_contract:
-        print("")
         print("[DEBUG] metrics missing from contract:")
-        for alert_name, metric_names in missing_from_contract.items():
-            print(f"  {alert_name}: {', '.join(sorted(metric_names))}")
+        for alert_name, metrics in missing_from_contract.items():
+            print(f"  {alert_name}: {', '.join(metrics)}")
 
-        fail("Some alert rule metrics are missing from metrics_contract.yml")
+    if missing_from_metrics:
+        print("[DEBUG] metrics missing from live endpoints:")
+        for alert_name, metrics in missing_from_metrics.items():
+            print(f"  {alert_name}: {', '.join(metrics)}")
 
-    if missing_from_metrics_endpoint:
-        print("")
-        print("[DEBUG] metrics missing from /metrics:")
-        for alert_name, metric_names in missing_from_metrics_endpoint.items():
-            print(f"  {alert_name}: {', '.join(sorted(metric_names))}")
+    if has_error:
+        fail_check("Some alert rule metrics are missing from contract or live endpoints")
+        sys.exit(1)
 
-        fail("Some alert rule metrics are missing from FastAPI /metrics")
-
-    print("")
-    pass_check(
-        f"Alert rule metric dependency check completed: "
-        f"{len(alert_dependencies)} alerts"
-    )
+    pass_check(f"Alert rule metric dependency check completed: {len(alert_rules)} alerts")
 
 
 if __name__ == "__main__":

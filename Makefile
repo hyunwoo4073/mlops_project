@@ -2,8 +2,8 @@
         airflow-init create-tables \
         dag-list dag-errors dag-tasks dag-trigger dag-runs \
         lint test test-container ci smoke data-contract-check model-class-performance-check alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check repo-artifact-check \
-        report incident-report model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check notify api-sample cleanup drift-check metrics \
-        prometheus prometheus-logs prometheus-check prometheus-rule-test \
+        report incident-report model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check notify notification-check notification-test-alert notification-resolve-alert api-sample cleanup drift-check metrics \
+        prometheus prometheus-logs prometheus-check prometheus-rule-test prometheus-external-target-check \
         alertmanager alertmanager-logs alertmanager-check \
         grafana grafana-logs \
         dashboard dashboard-logs \
@@ -73,6 +73,7 @@ help:
 	@echo "  make prometheus-logs        Show Prometheus logs"
 	@echo "  make prometheus-check       Validate Prometheus config and alert rules"
 	@echo "  make prometheus-rule-test   Run Prometheus alert rule unit tests"
+	@echo "  make prometheus-external-target-check  Check Prometheus external scrape targets"
 	@echo "  make alertmanager           Start Alertmanager"
 	@echo "  make alertmanager-logs      Show Alertmanager logs"
 	@echo "  make alertmanager-check     Validate Alertmanager config"
@@ -81,6 +82,9 @@ help:
 	@echo ""
 	@echo "Notification"
 	@echo "  make notify                 Send or print pipeline status notification"
+	@echo "  make notification-check          Check Alertmanager and Slack webhook configuration"
+	@echo "  make notification-test-alert     Send a test alert through Alertmanager"
+	@echo "  make notification-resolve-alert  Resolve the test alert through Alertmanager"
 	@echo ""
 	@echo "Maintenance"
 	@echo "  make cleanup                Run cleanup retention script"
@@ -226,6 +230,15 @@ model-lifecycle-check:
 notify:
 	docker compose exec airflow-scheduler bash -lc "cd /opt/airflow/project && python src/notification/notify_pipeline_status.py"
 
+notification-check:
+	python scripts/check_notification_channel.py
+
+notification-test-alert:
+	SEND_TEST_ALERT=true python scripts/check_notification_channel.py
+
+notification-resolve-alert:
+	SEND_TEST_ALERT=true RESOLVE_TEST_ALERT=true python scripts/check_notification_channel.py
+
 dashboard:
 	docker compose up -d dashboard
 
@@ -276,6 +289,9 @@ prometheus-rule-test:
 		-w /etc/prometheus \
 		prom/prometheus:v2.55.1 \
 		test rules /etc/prometheus/tests/jobskill_alert_rules.test.yml
+
+prometheus-external-target-check:
+	python scripts/check_prometheus_external_targets.py
 
 alertmanager:
 	docker compose up -d alertmanager
