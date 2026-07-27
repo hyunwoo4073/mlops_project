@@ -185,3 +185,16 @@ groups:
           runbook_url: "http://localhost:8000/runbooks/jobskill_alert_response_slo_breach.md"
           dashboard_url: "http://localhost:8501"
           prometheus_url: "http://localhost:9090/alerts"
+
+      - alert: JobSkillAlertmanagerNotificationFailure
+        expr: sum by (receiver, integration) (increase(alertmanager_notifications_failed_total[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: alertmanager
+        annotations:
+          summary: "Alertmanager notification delivery failed"
+          description: "Alertmanager failed to deliver one or more notifications in the last 5 minutes. Check Slack webhook URL, Alertmanager receiver config, and Alertmanager logs."
+          runbook_url: "http://localhost:8000/runbooks/jobskill_alertmanager_notification_failure.md"
+          dashboard_url: "http://localhost:3000"
+          prometheus_url: "http://localhost:9090/graph?g0.expr=sum%20by%20(receiver%2C%20integration)%20(increase(alertmanager_notifications_failed_total%5B5m%5D))"
