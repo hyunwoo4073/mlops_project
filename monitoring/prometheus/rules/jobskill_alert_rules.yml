@@ -198,3 +198,29 @@ groups:
           runbook_url: "http://localhost:8000/runbooks/jobskill_alertmanager_notification_failure.md"
           dashboard_url: "http://localhost:3000"
           prometheus_url: "http://localhost:9090/graph?g0.expr=sum%20by%20(receiver%2C%20integration)%20(increase(alertmanager_notifications_failed_total%5B5m%5D))"
+
+      - alert: JobSkillProductionFeedbackLowAccuracy
+        expr: jobskill_production_feedback_total >= 10 and jobskill_production_feedback_accuracy < 0.7
+        for: 5m
+        labels:
+          severity: warning
+          service: model-quality
+        annotations:
+          summary: "Production feedback accuracy is low"
+          description: "Production feedback accuracy is below the required threshold. Review recent prediction feedback records and consider retraining, rollback, or threshold adjustment."
+          runbook_url: "http://localhost:8000/runbooks/jobskill_production_feedback_low_accuracy.md"
+          dashboard_url: "http://localhost:3000"
+          prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_production_feedback_accuracy"
+
+      - alert: JobSkillProductionFeedbackLowF1
+        expr: jobskill_production_feedback_total >= 10 and jobskill_production_feedback_f1_weighted < 0.7
+        for: 5m
+        labels:
+          severity: warning
+          service: model-quality
+        annotations:
+          summary: "Production feedback weighted F1 is low"
+          description: "Production feedback weighted F1 is below the required threshold. Check class-level degradation, recent feedback distribution, and whether retraining is needed."
+          runbook_url: "http://localhost:8000/runbooks/jobskill_production_feedback_low_accuracy.md"
+          dashboard_url: "http://localhost:3000"
+          prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_production_feedback_f1_weighted"

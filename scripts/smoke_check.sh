@@ -43,6 +43,12 @@ print_related_logs() {
   if [[ "$name" == *"PostgreSQL"* || "$name" == *"Project tables"* || "$name" == *"Core table"* ]]; then
     docker compose logs --tail=100 postgres || true
   fi
+
+  if [[ "$name" == *"Production feedback"* || "$name" == *"Prediction feedback"* ]]; then
+    docker compose logs --tail=100 airflow-scheduler || true
+    docker compose logs --tail=100 api || true
+    docker compose logs --tail=100 postgres || true
+  fi
 }
 
 check_command() {
@@ -96,21 +102,32 @@ check_command \
 
 check_command \
   "Project tables" \
-  "docker exec jobskill-postgres psql -U jobskill -d jobskill -c \"
-    SELECT table_name
-    FROM information_schema.tables
-    WHERE table_schema = 'public'
-      AND table_name IN (
-        'raw_job_posts',
-        'cleaned_job_posts',
-        'job_post_skills',
-        'model_predictions',
-        'api_prediction_logs',
-        'pipeline_check_results',
-        'model_registry'
-      )
-    ORDER BY table_name;
-  \""
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    WITH required_tables(table_name) AS (
+      VALUES
+        ('raw_job_posts'),
+        ('cleaned_job_posts'),
+        ('job_post_skills'),
+        ('model_predictions'),
+        ('prediction_feedbacks'),
+        ('api_prediction_logs'),
+        ('pipeline_check_results'),
+        ('model_registry')
+    ),
+    missing_tables AS (
+      SELECT rt.table_name
+      FROM required_tables rt
+      LEFT JOIN information_schema.tables it
+        ON it.table_schema = 'public'
+       AND it.table_name = rt.table_name
+      WHERE it.table_name IS NULL
+    )
+    SELECT CASE
+      WHEN COUNT(*) = 0 THEN 'OK'
+      ELSE 'MISSING: ' || string_agg(table_name, ', ')
+    END
+    FROM missing_tables;
+  \" | grep -q '^OK$'"
 
 check_command \
   "Core table counts" \
@@ -122,6 +139,8 @@ check_command \
     SELECT 'job_post_skills', COUNT(*) FROM job_post_skills
     UNION ALL
     SELECT 'model_predictions', COUNT(*) FROM model_predictions
+    UNION ALL
+    SELECT 'prediction_feedbacks', COUNT(*) FROM prediction_feedbacks
     UNION ALL
     SELECT 'api_prediction_logs', COUNT(*) FROM api_prediction_logs
     UNION ALL
@@ -164,7 +183,11 @@ check_http \
 
 check_command \
   "FastAPI metrics content" \
-  "curl -fsS http://localhost:8000/metrics | grep -q jobskill_model_predictions_total"
+  "curl -fsS http://localhost:8000/metrics > /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_model_predictions_total /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_production_feedback_total /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_production_feedback_accuracy /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_production_feedback_f1_weighted /tmp/jobskill_metrics.txt"
 
 check_command \
   "FastAPI sample prediction requests" \
@@ -191,6 +214,48 @@ check_command \
     FROM model_predictions
     WHERE prediction_source = 'API';
   \" | grep -q OK"
+
+check_command \
+  "Create sample production feedback" \
+  "docker compose exec -T airflow-scheduler bash -lc \"
+    cd /opt/airflow/project &&
+    python scripts/create_sample_prediction_feedback.py --limit 30 --wrong-every 5
+  \""
+
+check_command \
+  "Prediction feedback rows" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM prediction_feedbacks;
+  \" | grep -q OK"
+
+check_command \
+  "Production feedback evaluation" \
+  "docker compose exec -T airflow-scheduler bash -lc \"
+    cd /opt/airflow/project &&
+    python src/quality/check_production_feedback.py
+  \""
+
+check_command \
+  "Production feedback check results" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM pipeline_check_results
+    WHERE check_type = 'PRODUCTION_FEEDBACK';
+  \" | grep -q OK"
+
+check_command \
+  "Production feedback metrics" \
+  "curl -fsS http://localhost:8000/metrics > /tmp/jobskill_production_feedback_metrics.txt && \
+   grep -q jobskill_production_feedback_total /tmp/jobskill_production_feedback_metrics.txt && \
+   grep -q jobskill_production_feedback_accuracy /tmp/jobskill_production_feedback_metrics.txt && \
+   grep -q jobskill_production_feedback_f1_weighted /tmp/jobskill_production_feedback_metrics.txt"
 
 check_http \
   "Prometheus UI" \

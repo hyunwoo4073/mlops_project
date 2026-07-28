@@ -1,238 +1,257 @@
-# JobSkill MLOps Project Summary
+# jobskill-mlops 요약본
 
-## 한 줄 요약
+## 1. 프로젝트 한 줄 요약
 
-채용공고 데이터를 수집·전처리해 직무 분류 모델을 학습하고, Airflow, MLflow, FastAPI, Streamlit, Prometheus, Alertmanager, Grafana를 연결해 **학습부터 운영 검증, 모니터링, 알림, 문서화까지 구성한 end-to-end 경량 MLOps 프로젝트**입니다.
+채용공고 데이터를 수집·전처리해 직무 분류 모델을 학습하고, 모델 승격, API serving, production feedback 평가, Prometheus alert, runbook, dashboard, CI smoke check까지 연결한 경량 end-to-end MLOps 프로젝트입니다.
 
-## 문서 읽는 순서
+## 2. 프로젝트 목표
 
-```text
-1. docs/README_SUMMARY.md
-   - 프로젝트가 무엇을 하는지 빠르게 파악
-
-2. docs/QUICKSTART.md
-   - 로컬에서 직접 실행하고 검증
-
-3. README.md 또는 docs/README_FULL.md
-   - 상세 구현, 트러블슈팅, 운영 기능 확인
-```
-
-## 핵심 목표
+이 프로젝트의 목표는 단순히 모델을 학습하는 것이 아니라, 실제 운영 MLOps에서 필요한 흐름을 작게 구현하는 것입니다.
 
 ```text
 데이터 수집
-→ 데이터 품질 검증
+→ 전처리
+→ 데이터 계약 검증
+→ 학습 데이터 품질 검증
 → 모델 학습
-→ MLflow 실험 추적
-→ 모델 성능 검증
+→ MLflow 기록
+→ 성능 검증
 → 모델 승격
-→ API / Batch 예측
-→ 운영 metric 노출
-→ Prometheus alert 평가
-→ Alertmanager / Slack 알림
-→ Runbook 기반 대응
-→ Dashboard / Report 확인
-→ Smoke / Ops 검증 자동화
+→ API serving
+→ 예측 결과 저장
+→ 운영 feedback 저장
+→ production 성능 평가
+→ metric 노출
+→ alert / runbook / dashboard 대응
+→ CI / smoke / ops validation 검증
 ```
 
-## 주요 구성 요소
-
-| 영역 | 구성 |
-|---|---|
-| Orchestration | Airflow 3.x |
-| Database | PostgreSQL |
-| ML Tracking | MLflow |
-| Model | TF-IDF + Logistic Regression |
-| Serving | FastAPI |
-| Dashboard | Streamlit, Grafana |
-| Monitoring | Prometheus |
-| Alerting | Alertmanager, Slack Incoming Webhook |
-| Validation | Data Contract, Metrics Contract, Alert Rule Dependency, Smoke Check |
-| Documentation | README, Quick Start, Model Card, Runbook, Incident Report |
-
-## 구현된 주요 기능
-
-### 1. 데이터 파이프라인
+## 3. 주요 구성
 
 ```text
-sample_only / crawler_only / mixed 데이터 소스 모드
-Remote OK 채용공고 수집
-수집 실패 retry / fallback
-raw_job_posts 적재
-cleaned_job_posts 전처리
-job_post_skills 기술스택 추출
+Airflow
+- 전체 파이프라인 오케스트레이션
+
+PostgreSQL
+- raw / cleaned / skills / predictions / feedback / checks / registry 저장
+
+MLflow
+- 학습 run, metric, artifact, model 기록
+
+FastAPI
+- /predict
+- /health
+- /ready
+- /metrics
+- /alertmanager/webhook
+- /runbooks
+
+Streamlit Dashboard
+- 데이터/모델/API/alert/model lifecycle/incident report 조회
+
+Prometheus
+- FastAPI metrics scrape
+- Alertmanager metrics scrape
+- alert rule 평가
+
+Alertmanager
+- FastAPI webhook 전달
+- Slack notification
+- silence 관리
+
+Grafana
+- 운영 metric dashboard
 ```
 
-### 2. 데이터 품질 / 계약 검증
+## 4. MLOps 관점 핵심 기능
+
+### 데이터 품질
 
 ```text
-training data quality check
-data contract check
-raw / cleaned / skill 테이블 schema 검증
-필수 컬럼, null ratio, empty ratio, allowed value 검증
-검증 결과 pipeline_check_results 저장
+config/data_contract.json
+src/quality/check_data_contract.py
+src/quality/check_training_data.py
 ```
 
-### 3. 모델 학습 / 평가 / 거버넌스
+검증 내용:
 
 ```text
-TF-IDF + Logistic Regression 학습
-MLflow run 기록
-training dataset profile 저장
-training dataset hash 저장
-classification report 저장
-confusion matrix 저장
-evaluation distribution 저장
-class-level precision / recall / f1-score / support 저장
-model performance gate
-class-level model performance gate
-best model promotion
-model registry 저장
+필수 테이블
+필수 컬럼
+컬럼 타입
+최소 row 수
+null ratio
+empty ratio
+allowed value
+Unknown label ratio
+class 다양성
+```
+
+### 모델 품질
+
+```text
+src/training/train_baseline.py
+src/quality/check_model_performance.py
+src/quality/check_model_class_performance.py
+src/training/promote_model.py
+```
+
+검증 내용:
+
+```text
+accuracy
+weighted F1
+class별 precision / recall / f1-score / support
+promotion threshold
+model_registry 저장
+best model artifact 생성
+```
+
+### 모델 운영
+
+```text
+scripts/archive_promoted_model.py
+scripts/rollback_promoted_model.py
+scripts/check_model_lifecycle_integrity.py
+src/reporting/generate_model_card.py
+```
+
+기능:
+
+```text
 promoted model archive
-model rollback CLI
+rollback dry-run
+rollback execution
+rollback action history
 model lifecycle integrity check
-Model Card 생성
+model card 생성
 ```
 
-### 4. API / 예측 운영
+### Serving / Prediction
 
 ```text
-FastAPI /predict
-FastAPI /health
-FastAPI /ready
-FastAPI /metrics
-FastAPI /model
-FastAPI /reload-model
-API prediction log 저장
-prediction lineage 저장
-confidence / low confidence / top-k prediction 저장
+src/inference/api.py
+src/inference/batch_inference.py
+scripts/send_sample_api_requests.py
+```
+
+기능:
+
+```text
+API prediction
 batch inference
-prediction quality gate
-prediction drift gate
+prediction lineage 저장
+api_prediction_logs 저장
+prediction quality check
+prediction drift check
 ```
 
-### 5. 모니터링 / 알림
+### Production Feedback
 
 ```text
-FastAPI Prometheus metrics 노출
-Prometheus scrape 구성
-Prometheus alert rule 구성
-Prometheus rule unit test
-Alertmanager webhook routing
-Alertmanager Slack notification
-Alertmanager direct alert API 기반 수동 Slack 알림 검증
-Alertmanager notification failure monitoring
-Slack notification 전송 실패 감지
-Runbook URL / Grafana URL / Prometheus URL alert annotation
+prediction_feedbacks
+scripts/create_sample_prediction_feedback.py
+src/quality/check_production_feedback.py
+src/monitoring/prometheus_metrics.py
 ```
 
-### 6. Alert 운영 기능
+기능:
 
 ```text
-alert_events 저장
-alert_current_states 저장
-alert_acknowledgements 저장
-alert_settings 기반 maintenance mode
-alert_silence_actions 저장
-Alertmanager silence / snooze
-MTTA / MTTR metric
-alert response escalation rule
-incident response report
-incident drill
-alert workflow smoke check
+예측 결과별 실제 라벨 feedback 저장
+sample feedback 생성
+production accuracy 계산
+production weighted F1 계산
+PRODUCTION_FEEDBACK check result 저장
+/metrics에 production feedback metric 노출
+Prometheus alert rule 연결
+runbook 대응
 ```
 
-### 7. 운영 검증 자동화
+## 5. 오늘 추가된 Production Feedback 흐름
 
 ```text
-runbook coverage check
-metrics contract check
-external metrics contract check
-alert rule metric dependency check
-multi-source metric dependency check
-static ops validation
-ops validation
-repository artifact guard
-Prometheus rule test
-GitHub Actions smoke check
+model_predictions
+→ prediction_feedbacks
+→ check_production_feedback.py
+→ pipeline_check_results
+→ jobskill_production_feedback_* metrics
+→ Prometheus alert
+→ runbook
 ```
 
-## 최근 개선 요약
-
-### Alertmanager Notification Failure Monitoring
-
-Alertmanager가 Slack으로 알림을 보내지 못하는 상황을 `alertmanager_notifications_failed_total` metric으로 감지합니다.
+추가 metric:
 
 ```text
-Metric:
-alertmanager_notifications_failed_total
-
-Alert:
-JobSkillAlertmanagerNotificationFailure
-
-Runbook:
-docs/runbooks/jobskill_alertmanager_notification_failure.md
+jobskill_production_feedback_total
+jobskill_production_feedback_accuracy
+jobskill_production_feedback_f1_weighted
+jobskill_production_feedback_category_total
 ```
 
-### External Metrics Contract
-
-FastAPI metric과 Alertmanager metric을 하나의 contract에서 관리하되 source를 분리합니다.
-
-```yaml
-required_metrics:
-  - jobskill_api_ready
-  - jobskill_alert_maintenance_mode
-
-external_metrics:
-  alertmanager:
-    url: http://localhost:9093/metrics
-    required_metrics:
-      - alertmanager_notifications_failed_total
-```
-
-### Stable Zero Metrics
-
-DB 초기화 직후 row가 없어도 required metric이 0으로 노출되도록 개선했습니다.
+추가 alert:
 
 ```text
-jobskill_alert_acknowledgements_total 0
-jobskill_alert_avg_mtta_minutes 0
-jobskill_alert_unacknowledged_current_total 0
+JobSkillProductionFeedbackLowAccuracy
+JobSkillProductionFeedbackLowF1
 ```
 
-## 주요 검증 명령어
+추가 runbook:
 
-```bash
+```text
+docs/runbooks/jobskill_production_feedback_low_accuracy.md
+```
+
+## 6. 운영 검증 체계
+
+```text
+make smoke
+make ops-static-check
+make ops-check
 make runbook-check
 make metrics-contract-check
 make alert-rule-metric-check
 make prometheus-rule-test
-make ops-check
+make prometheus-external-target-check
+make compose-config-check
+make repo-artifact-check
 ```
 
-## 포트폴리오에서 강조할 점
+검증 대상:
 
 ```text
-1. 단순 ML 모델 학습이 아니라 운영 가능한 MLOps 흐름을 구성함
-2. 데이터 품질, 모델 성능, class-level 성능을 promotion 전에 검증함
-3. MLflow dataset/evaluation artifact로 모델 재현성과 추적성을 강화함
-4. Prometheus / Alertmanager / Slack / Runbook으로 운영 장애 대응 흐름을 구성함
-5. metric contract와 alert rule dependency check로 모니터링 설정 자체를 검증함
-6. DB 초기화, Docker Compose 기동, runtime artifact 관리까지 운영 관점으로 정리함
+Docker Compose 최종 렌더링 설정
+Prometheus config
+Prometheus rule syntax
+Prometheus rule unit test
+Alertmanager config
+Runbook coverage
+Metrics contract
+Alert rule metric dependency
+FastAPI health / readiness
+FastAPI metrics
+Production feedback 생성/평가/metric
+Alert workflow
+Smoke check
 ```
 
-## 현재 프로젝트 상태
+## 7. 포트폴리오에서 강조할 점
 
 ```text
-MVP 수준:
-완료
+1. Airflow + MLflow + FastAPI + Prometheus + Alertmanager + Grafana + Streamlit를 end-to-end로 연결
+2. 모델 학습뿐 아니라 데이터 계약, 모델 검증, 운영 metric, alert, runbook까지 구현
+3. Production Feedback Evaluation Loop로 배포 후 모델 품질을 운영 데이터 기준으로 평가
+4. Prometheus rule test, metrics contract, alert dependency check로 운영 검증 자동화
+5. Model archive / rollback / model card / lifecycle integrity check로 모델 운영 시나리오 구현
+```
 
-운영 검증:
-Prometheus / Alertmanager / Runbook / Metrics Contract / Rule Test 기반으로 구성 완료
+## 8. 최근 주요 업데이트
 
-문서화:
-상세 README, 요약본, Quick Start, Runbook, Model Card, Incident Report로 분리 중
-
-다음 개선:
-문서 구조 정리, external target scrape check, dashboard 기반 검증 결과 시각화
+```text
+2026-07-28
+- Production Feedback Evaluation Loop 추가
+- Production feedback metrics / alerts / runbook 추가
+- smoke check에 feedback 생성/평가/metric 검증 추가
+- Makefile 정리 및 production feedback 명령어 추가
+- runbook coverage, rule test, alert dependency check 기준 14개 alert 검증
 ```

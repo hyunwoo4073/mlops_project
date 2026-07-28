@@ -67,6 +67,10 @@ check_command \
   make prometheus-check
 
 check_command \
+  "Compose rendered config check" \
+  make compose-config-check
+
+check_command \
   "Prometheus alert rule unit tests" \
   make prometheus-rule-test
 
@@ -80,7 +84,7 @@ check_command \
 
 check_command \
   "Alert rule metric dependencies" \
-  python scripts/check_alert_rule_metric_dependencies.py --skip-metrics-endpoint
+  python scripts/check_alert_rule_metric_dependencies.py --skip-url
 
 echo ""
 echo "========================================"
