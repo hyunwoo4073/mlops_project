@@ -131,6 +131,11 @@ class PredictRequest(BaseModel):
     description: str
     job_post_id: int | None = None
 
+class PredictionFeedbackRequest(BaseModel):
+    actual_category: str
+    feedback_source: str = "manual"
+    feedback_note: str | None = None
+    created_by: str = "system"
 
 class PredictResponse(BaseModel):
     job_category: str
@@ -420,6 +425,102 @@ def reload_model():
         "model_registry_id": metadata.model_registry_id,
         "model_path": str(metadata.model_path),
         "model_status": metadata.status,
+    }
+
+
+@app.post("/predictions/{prediction_id}/feedback")
+def create_prediction_feedback(
+    prediction_id: int,
+    request: PredictionFeedbackRequest,
+) -> dict[str, object]:
+    actual_category = request.actual_category.strip()
+
+    if not actual_category:
+        raise HTTPException(
+            status_code=400,
+            detail="actual_category must not be empty",
+        )
+
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        prediction = conn.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    predicted_category,
+                    prediction_source,
+                    model_name,
+                    model_version,
+                    model_run_id,
+                    model_registry_id
+                FROM model_predictions
+                WHERE id = :prediction_id
+                """
+            ),
+            {"prediction_id": prediction_id},
+        ).mappings().first()
+
+        if prediction is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prediction not found: {prediction_id}",
+            )
+
+        feedback = conn.execute(
+            text(
+                """
+                INSERT INTO prediction_feedbacks (
+                    prediction_id,
+                    actual_category,
+                    feedback_source,
+                    feedback_note,
+                    created_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :prediction_id,
+                    :actual_category,
+                    :feedback_source,
+                    :feedback_note,
+                    :created_by,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (prediction_id)
+                DO UPDATE SET
+                    actual_category = EXCLUDED.actual_category,
+                    feedback_source = EXCLUDED.feedback_source,
+                    feedback_note = EXCLUDED.feedback_note,
+                    created_by = EXCLUDED.created_by,
+                    updated_at = NOW()
+                RETURNING
+                    id,
+                    prediction_id,
+                    actual_category,
+                    feedback_source,
+                    feedback_note,
+                    created_by,
+                    created_at,
+                    updated_at
+                """
+            ),
+            {
+                "prediction_id": prediction_id,
+                "actual_category": actual_category,
+                "feedback_source": request.feedback_source,
+                "feedback_note": request.feedback_note,
+                "created_by": request.created_by,
+            },
+        ).mappings().one()
+
+    return {
+        "status": "success",
+        "feedback": dict(feedback),
+        "prediction": dict(prediction),
+        "is_correct": prediction["predicted_category"] == actual_category,
     }
 
 
@@ -885,3 +986,49 @@ def readiness_check():
         )
 
     return response
+
+
+@app.get("/predictions/feedback/recent")
+def get_recent_prediction_feedback(limit: int = 20) -> dict[str, object]:
+    limit = max(1, min(limit, 100))
+
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT
+                    pf.id AS feedback_id,
+                    pf.prediction_id,
+                    mp.predicted_category,
+                    pf.actual_category,
+                    CASE
+                        WHEN mp.predicted_category = pf.actual_category THEN true
+                        ELSE false
+                    END AS is_correct,
+                    mp.prediction_source,
+                    mp.confidence,
+                    mp.model_name,
+                    mp.model_version,
+                    mp.model_run_id,
+                    mp.model_registry_id,
+                    pf.feedback_source,
+                    pf.feedback_note,
+                    pf.created_by,
+                    pf.created_at,
+                    pf.updated_at
+                FROM prediction_feedbacks pf
+                JOIN model_predictions mp
+                    ON pf.prediction_id = mp.id
+                ORDER BY pf.updated_at DESC, pf.id DESC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        ).mappings().all()
+
+    return {
+        "count": len(rows),
+        "items": [dict(row) for row in rows],
+    }    

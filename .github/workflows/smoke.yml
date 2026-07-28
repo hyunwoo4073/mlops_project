@@ -75,6 +75,10 @@ jobs:
           DATA_SOURCE_MODE=sample_only
           EOF
 
+      - name: Check rendered Compose config
+        run: |
+          make compose-config-check
+
       - name: Prepare runtime directories
         run: |
           mkdir -p data/raw data/processed models/best mlartifacts airflow_logs reports docs/images

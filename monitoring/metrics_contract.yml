@@ -36,6 +36,12 @@ required_metrics:
   # Alert control metrics
   - jobskill_alert_maintenance_mode
 
+  # Production feedback metrics
+  - jobskill_production_feedback_total
+  - jobskill_production_feedback_accuracy
+  - jobskill_production_feedback_f1_weighted
+  - jobskill_production_feedback_category_total
+
 external_metrics:
   alertmanager:
     url: http://localhost:9093/metrics

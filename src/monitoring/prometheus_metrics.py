@@ -452,6 +452,87 @@ def build_metrics_text() -> str:
             )
         ).mappings().all()
 
+        prediction_feedbacks_exists = conn.execute(
+            text("SELECT to_regclass('public.prediction_feedbacks') IS NOT NULL")
+        ).scalar()
+
+        if prediction_feedbacks_exists:
+            production_feedback_summary_row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) AS feedback_count,
+                        AVG(
+                            CASE
+                                WHEN pf.actual_category = mp.predicted_category
+                                    THEN 1.0
+                                ELSE 0.0
+                            END
+                        ) AS accuracy
+                    FROM prediction_feedbacks pf
+                    JOIN model_predictions mp
+                        ON pf.prediction_id = mp.id
+                    """
+                )
+            ).mappings().first()
+
+            production_feedback_category_rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        COALESCE(pf.actual_category, 'Unknown') AS actual_category,
+                        COALESCE(mp.predicted_category, 'Unknown') AS predicted_category,
+                        COUNT(*) AS count
+                    FROM prediction_feedbacks pf
+                    JOIN model_predictions mp
+                        ON pf.prediction_id = mp.id
+                    GROUP BY
+                        COALESCE(pf.actual_category, 'Unknown'),
+                        COALESCE(mp.predicted_category, 'Unknown')
+                    ORDER BY actual_category, predicted_category
+                    """
+                )
+            ).mappings().all()
+        else:
+            production_feedback_summary_row = {
+                "feedback_count": 0,
+                "accuracy": 0.0,
+            }
+            production_feedback_category_rows = []
+
+        production_feedback_latest_metric_rows = conn.execute(
+            text(
+                """
+                SELECT DISTINCT ON (check_name)
+                    check_name,
+                    metric_value,
+                    status,
+                    checked_at
+                FROM pipeline_check_results
+                WHERE check_type = 'PRODUCTION_FEEDBACK'
+                  AND check_name IN (
+                      'production_feedback_count',
+                      'production_accuracy',
+                      'production_f1_weighted'
+                  )
+                ORDER BY check_name, checked_at DESC
+                """
+            )
+        ).mappings().all()
+
+    production_feedback_latest_metrics = {
+        row["check_name"]: _float_or_zero(row["metric_value"])
+        for row in production_feedback_latest_metric_rows
+    }
+
+    production_feedback_count = int(
+        production_feedback_summary_row["feedback_count"] or 0
+    )
+
+    production_feedback_accuracy = _float_or_zero(
+        production_feedback_summary_row["accuracy"]
+    )
+
     _add_metric(
         lines=lines,
         name="jobskill_alert_maintenance_mode",
@@ -703,6 +784,67 @@ def build_metrics_text() -> str:
         metric_type="gauge",
         help_text="Recent failed pipeline checks within the alert evaluation window.",
         values=recent_failed_check_values,
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_production_feedback_total",
+        metric_type="gauge",
+        help_text="Total production feedback records linked to model predictions.",
+        values=[
+            (
+                {},
+                production_feedback_count,
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_production_feedback_accuracy",
+        metric_type="gauge",
+        help_text="Production accuracy calculated from prediction feedback records.",
+        values=[
+            (
+                {},
+                production_feedback_accuracy,
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_production_feedback_f1_weighted",
+        metric_type="gauge",
+        help_text="Latest weighted F1 score from production feedback evaluation.",
+        values=[
+            (
+                {},
+                production_feedback_latest_metrics.get(
+                    "production_f1_weighted",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_production_feedback_category_total",
+        metric_type="gauge",
+        help_text=(
+            "Production feedback count by actual category and predicted category."
+        ),
+        values=[
+            (
+                {
+                    "actual_category": row["actual_category"],
+                    "predicted_category": row["predicted_category"],
+                },
+                int(row["count"]),
+            )
+            for row in production_feedback_category_rows
+        ],
     )
 
     _add_metric(

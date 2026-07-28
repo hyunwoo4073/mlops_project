@@ -432,3 +432,27 @@ ON model_rollback_actions(previous_model_registry_id);
 
 CREATE INDEX IF NOT EXISTS idx_model_rollback_actions_created_at
 ON model_rollback_actions(created_at);
+
+CREATE TABLE IF NOT EXISTS prediction_feedbacks (
+    id SERIAL PRIMARY KEY,
+    prediction_id INTEGER NOT NULL REFERENCES model_predictions(id) ON DELETE CASCADE,
+    actual_category VARCHAR(100) NOT NULL,
+    feedback_source VARCHAR(50) NOT NULL DEFAULT 'manual',
+    feedback_note TEXT,
+    created_by VARCHAR(100) DEFAULT 'system',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (prediction_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_feedbacks_prediction_id
+ON prediction_feedbacks (prediction_id);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_feedbacks_actual_category
+ON prediction_feedbacks (actual_category);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_feedbacks_created_at
+ON prediction_feedbacks (created_at);
+
+CREATE INDEX IF NOT EXISTS idx_prediction_feedbacks_source
+ON prediction_feedbacks (feedback_source);

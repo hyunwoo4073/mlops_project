@@ -27,6 +27,28 @@ docs/QUICKSTART.md
 ## 주요 업데이트 내역
 
 ```text
+2026-07-28
+- Production Feedback Evaluation Loop 추가
+- `prediction_feedbacks` 테이블을 추가해 운영 예측 결과와 실제 정답/수정 라벨을 연결 저장
+- FastAPI에 `POST /predictions/{prediction_id}/feedback` endpoint를 추가해 예측 결과별 feedback upsert 지원
+- FastAPI에 `GET /predictions/feedback/recent` endpoint를 추가해 최근 production feedback 조회 지원
+- `scripts/create_sample_prediction_feedback.py` 추가로 최근 `model_predictions` 기준 샘플 feedback 생성 자동화
+- `scripts/create_sample_prediction_feedback.py`에서 현재 `model_predictions` 스키마에 없는 `created_at` 조회를 제거해 실행 오류 수정
+- `src/quality/check_production_feedback.py` 추가로 feedback 기준 운영 accuracy / weighted F1 평가
+- Production feedback 평가 결과를 `pipeline_check_results`에 `PRODUCTION_FEEDBACK` 타입으로 저장
+- `src/monitoring/prometheus_metrics.py`에 production feedback metric 추가
+- `/metrics`에 `jobskill_production_feedback_total`, `jobskill_production_feedback_accuracy`, `jobskill_production_feedback_f1_weighted`, `jobskill_production_feedback_category_total` 노출
+- `prediction_feedbacks` 테이블이 없거나 feedback 데이터가 비어 있어도 `/metrics`가 실패하지 않도록 0-value metric fallback 처리
+- `monitoring/metrics_contract.yml`에 production feedback metric을 required metric으로 추가
+- `scripts/smoke_check.sh`에 production feedback 생성, 평가, DB row, metrics 노출 검증 추가
+- Makefile 명령어를 목적별로 재정리하고 `production-feedback-sample`, `production-feedback-check` target 추가
+- `JobSkillProductionFeedbackLowAccuracy`, `JobSkillProductionFeedbackLowF1` Prometheus alert rule 추가
+- Production feedback 성능 저하 대응 runbook `docs/runbooks/jobskill_production_feedback_low_accuracy.md` 추가
+- Production feedback alert rule test 추가
+- alert rule dependency check / runbook coverage / prometheus rule test 기준 alert 수 14개 정상 검증
+- `scripts/check_static_ops_validation.sh`의 alert rule dependency check 옵션을 현재 스크립트 기준 `--skip-url`로 정리
+- `make runbook-check`, `make prometheus-check`, `make prometheus-rule-test`, `make alert-rule-metric-check`, `make ops-static-check` 검증 흐름 정리
+
 2026-07-27
 - Alertmanager notification failure monitoring 추가
 - Prometheus가 Alertmanager `/metrics`를 scrape하도록 `alertmanager` scrape job 추가
@@ -269,6 +291,145 @@ docs/QUICKSTART.md
 - prediction quality 결과를 pipeline_check_results에 저장
 - API quality / prediction quality 리포트 항목 추가
 - FK 제약조건 및 SQL 문법 오류 트러블슈팅 정리
+```
+
+
+## Production Feedback Evaluation Loop
+
+Production Feedback Evaluation Loop는 운영 예측 결과가 실제로 맞았는지 확인하기 위한 MLOps 품질 관리 기능입니다.
+
+기존 파이프라인은 학습 데이터 기준 성능, class-level 성능, prediction quality, drift, API 로그, Prometheus metric, alert rule을 이미 검증했습니다. 이번 개선에서는 배포 이후의 예측 결과에 실제 정답 또는 사람이 수정한 라벨을 연결해 운영 기준 성능을 다시 평가할 수 있도록 구성했습니다.
+
+```text
+FastAPI /predict 또는 batch inference
+→ model_predictions 저장
+→ prediction_feedbacks에 실제 라벨 feedback 저장
+→ check_production_feedback.py 실행
+→ production accuracy / weighted F1 계산
+→ pipeline_check_results에 PRODUCTION_FEEDBACK 저장
+→ FastAPI /metrics에 production feedback metric 노출
+→ Prometheus alert rule로 운영 성능 저하 감지
+→ runbook 기반 대응
+```
+
+### 추가된 주요 구성요소
+
+```text
+sql/create_tables.sql
+- prediction_feedbacks 테이블 추가
+
+src/inference/api.py
+- POST /predictions/{prediction_id}/feedback
+- GET /predictions/feedback/recent
+
+scripts/create_sample_prediction_feedback.py
+- 최근 model_predictions 기준 샘플 feedback 생성
+- wrong-every 옵션으로 일부러 오답 feedback을 만들어 alert 테스트 가능
+
+src/quality/check_production_feedback.py
+- feedback 기준 production accuracy / weighted F1 평가
+- pipeline_check_results에 PRODUCTION_FEEDBACK 결과 저장
+
+src/monitoring/prometheus_metrics.py
+- jobskill_production_feedback_* metric 노출
+
+monitoring/metrics_contract.yml
+- production feedback metric contract 추가
+
+monitoring/prometheus/rules/jobskill_alert_rules.yml
+- JobSkillProductionFeedbackLowAccuracy
+- JobSkillProductionFeedbackLowF1
+
+monitoring/prometheus/tests/jobskill_alert_rules.test.yml
+- production feedback alert rule unit test 추가
+
+docs/runbooks/jobskill_production_feedback_low_accuracy.md
+- 운영 feedback 성능 저하 대응 runbook
+
+scripts/smoke_check.sh
+- production feedback 생성, 평가, metric 노출 smoke check 추가
+
+Makefile
+- production-feedback-sample
+- production-feedback-check
+```
+
+### Production Feedback Metrics
+
+FastAPI `/metrics`에서 아래 metric을 노출합니다.
+
+```text
+jobskill_production_feedback_total
+jobskill_production_feedback_accuracy
+jobskill_production_feedback_f1_weighted
+jobskill_production_feedback_category_total
+```
+
+metric 확인:
+
+```bash
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_production_feedback"
+```
+
+### Production Feedback 실행
+
+샘플 feedback 생성:
+
+```bash
+make production-feedback-sample
+```
+
+오답 비율을 조정한 샘플 feedback 생성:
+
+```bash
+LIMIT=30 WRONG_EVERY=2 make production-feedback-sample
+```
+
+Production feedback 성능 평가:
+
+```bash
+make production-feedback-check
+```
+
+평가 결과 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    message,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type = 'PRODUCTION_FEEDBACK'
+ORDER BY checked_at DESC
+LIMIT 10;
+"
+```
+
+### Production Feedback Alert
+
+Prometheus alert rule은 feedback 수가 충분히 쌓인 뒤 운영 성능이 임계값보다 낮을 때 firing 됩니다.
+
+```text
+JobSkillProductionFeedbackLowAccuracy
+- jobskill_production_feedback_total >= 10
+- jobskill_production_feedback_accuracy < 0.7
+
+JobSkillProductionFeedbackLowF1
+- jobskill_production_feedback_total >= 10
+- jobskill_production_feedback_f1_weighted < 0.7
+```
+
+검증:
+
+```bash
+make prometheus-check
+make prometheus-rule-test
+make runbook-check
+make alert-rule-metric-check
 ```
 
 
