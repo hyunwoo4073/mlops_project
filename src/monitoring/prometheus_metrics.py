@@ -520,10 +520,61 @@ def build_metrics_text() -> str:
             )
         ).mappings().all()
 
+        retraining_candidate_check_rows = conn.execute(
+            text(
+                """
+                SELECT DISTINCT ON (check_name)
+                    check_name,
+                    status,
+                    metric_value,
+                    threshold_value,
+                    checked_at
+                FROM pipeline_check_results
+                WHERE check_type = 'RETRAINING_CANDIDATE'
+                  AND check_name IN (
+                      'retraining_candidate_flag',
+                      'retraining_feedback_count',
+                      'retraining_accuracy',
+                      'retraining_f1_weighted',
+                      'retraining_accuracy_delta',
+                      'retraining_f1_delta'
+                  )
+                ORDER BY check_name, checked_at DESC
+                """
+            )
+        ).mappings().all()
+
     production_feedback_latest_metrics = {
         row["check_name"]: _float_or_zero(row["metric_value"])
         for row in production_feedback_latest_metric_rows
     }
+
+    retraining_candidate_latest_metrics = {
+        row["check_name"]: _float_or_zero(row["metric_value"])
+        for row in retraining_candidate_check_rows
+    }
+
+    retraining_candidate_latest_statuses = {
+        row["check_name"]: str(row["status"] or "UNKNOWN")
+        for row in retraining_candidate_check_rows
+    }
+
+    retraining_candidate_flag_value = retraining_candidate_latest_metrics.get(
+        "retraining_candidate_flag",
+        0.0,
+    )
+
+    retraining_candidate_flag_status = retraining_candidate_latest_statuses.get(
+        "retraining_candidate_flag",
+        "UNKNOWN",
+    )
+
+    jobskill_retraining_candidate_flag = (
+        1
+        if retraining_candidate_flag_value >= 1
+        or retraining_candidate_flag_status == "FAIL"
+        else 0
+    )
 
     production_feedback_count = int(
         production_feedback_summary_row["feedback_count"] or 0
@@ -844,6 +895,108 @@ def build_metrics_text() -> str:
                 int(row["count"]),
             )
             for row in production_feedback_category_rows
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_retraining_candidate_flag",
+        metric_type="gauge",
+        help_text=(
+            "Whether the latest production-feedback based retraining decision "
+            "marks the current model as a retraining candidate. 1 means candidate."
+        ),
+        values=[
+            (
+                {},
+                jobskill_retraining_candidate_flag,
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_retraining_candidate_feedback_count",
+        metric_type="gauge",
+        help_text="Latest feedback count used for retraining candidate decision.",
+        values=[
+            (
+                {},
+                retraining_candidate_latest_metrics.get(
+                    "retraining_feedback_count",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_retraining_candidate_accuracy",
+        metric_type="gauge",
+        help_text="Latest production feedback accuracy used for retraining candidate decision.",
+        values=[
+            (
+                {},
+                retraining_candidate_latest_metrics.get(
+                    "retraining_accuracy",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_retraining_candidate_f1_weighted",
+        metric_type="gauge",
+        help_text="Latest production feedback weighted F1 used for retraining candidate decision.",
+        values=[
+            (
+                {},
+                retraining_candidate_latest_metrics.get(
+                    "retraining_f1_weighted",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_retraining_candidate_accuracy_delta",
+        metric_type="gauge",
+        help_text=(
+            "Latest accuracy delta used for retraining candidate trend decision. "
+            "Negative value means accuracy dropped."
+        ),
+        values=[
+            (
+                {},
+                retraining_candidate_latest_metrics.get(
+                    "retraining_accuracy_delta",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_retraining_candidate_f1_delta",
+        metric_type="gauge",
+        help_text=(
+            "Latest weighted F1 delta used for retraining candidate trend decision. "
+            "Negative value means weighted F1 dropped."
+        ),
+        values=[
+            (
+                {},
+                retraining_candidate_latest_metrics.get(
+                    "retraining_f1_delta",
+                    0.0,
+                ),
+            )
         ],
     )
 

@@ -2264,6 +2264,1598 @@ def render_model_evaluation_section():
     )
 
 
+def fetch_production_feedback_summary() -> pd.DataFrame:
+    if not dashboard_table_exists("prediction_feedbacks"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            COUNT(*) AS feedback_total,
+            COUNT(*) FILTER (
+                WHERE pf.actual_category = mp.predicted_category
+            ) AS correct_count,
+            COUNT(*) FILTER (
+                WHERE pf.actual_category <> mp.predicted_category
+            ) AS incorrect_count,
+            ROUND(
+                AVG(
+                    CASE
+                        WHEN pf.actual_category = mp.predicted_category THEN 1.0
+                        ELSE 0.0
+                    END
+                )::numeric,
+                4
+            ) AS accuracy
+        FROM prediction_feedbacks pf
+        JOIN model_predictions mp
+            ON pf.prediction_id = mp.id
+    """)
+
+
+def fetch_latest_production_feedback_checks(limit: int = 20) -> pd.DataFrame:
+    if not dashboard_table_exists("pipeline_check_results"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            check_name,
+            status,
+            ROUND(metric_value::numeric, 4) AS metric_value,
+            ROUND(threshold_value::numeric, 4) AS threshold_value,
+            message,
+            checked_at
+        FROM pipeline_check_results
+        WHERE check_type = 'PRODUCTION_FEEDBACK'
+        ORDER BY checked_at DESC, id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def fetch_production_feedback_evaluation_history(limit: int = 100) -> pd.DataFrame:
+    if not dashboard_table_exists("pipeline_check_results"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        WITH normalized_checks AS (
+            SELECT
+                COALESCE(run_id, 'manual') AS run_id,
+                date_trunc('second', checked_at) AS evaluated_at,
+                check_name,
+                status,
+                metric_value,
+                threshold_value
+            FROM pipeline_check_results
+            WHERE check_type = 'PRODUCTION_FEEDBACK'
+              AND check_name IN (
+                  'production_feedback_count',
+                  'production_accuracy',
+                  'production_f1_weighted'
+              )
+        )
+        SELECT
+            run_id,
+            evaluated_at,
+            ROUND(
+                MAX(metric_value) FILTER (
+                    WHERE check_name = 'production_feedback_count'
+                )::numeric,
+                4
+            ) AS feedback_count,
+            ROUND(
+                MAX(metric_value) FILTER (
+                    WHERE check_name = 'production_accuracy'
+                )::numeric,
+                4
+            ) AS accuracy,
+            ROUND(
+                MAX(threshold_value) FILTER (
+                    WHERE check_name = 'production_accuracy'
+                )::numeric,
+                4
+            ) AS accuracy_threshold,
+            ROUND(
+                MAX(metric_value) FILTER (
+                    WHERE check_name = 'production_f1_weighted'
+                )::numeric,
+                4
+            ) AS f1_weighted,
+            ROUND(
+                MAX(threshold_value) FILTER (
+                    WHERE check_name = 'production_f1_weighted'
+                )::numeric,
+                4
+            ) AS f1_threshold,
+            CASE
+                WHEN COUNT(*) FILTER (WHERE status = 'FAIL') > 0 THEN 'FAIL'
+                WHEN COUNT(*) FILTER (WHERE status = 'SKIPPED') > 0 THEN 'SKIPPED'
+                WHEN COUNT(*) FILTER (WHERE status = 'PASS') > 0 THEN 'PASS'
+                ELSE 'UNKNOWN'
+            END AS overall_status
+        FROM normalized_checks
+        GROUP BY
+            run_id,
+            evaluated_at
+        ORDER BY evaluated_at DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def render_production_feedback_evaluation_history_section(
+    history_df: pd.DataFrame,
+) -> None:
+    st.subheader("Production Feedback Evaluation History")
+
+    st.caption(
+        "production feedback 평가 결과가 시간에 따라 좋아지는지, "
+        "나빠지는지 확인합니다. "
+        "평가 단위는 pipeline_check_results의 PRODUCTION_FEEDBACK 결과입니다."
+    )
+
+    if history_df.empty:
+        st.info("아직 production feedback 평가 이력이 없습니다.")
+        st.code("make production-feedback-check", language="bash")
+        return
+
+    latest_row = history_df.iloc[0]
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Latest Status", str(latest_row.get("overall_status") or "-"))
+    col2.metric(
+        "Latest Feedback Count",
+        "-" if pd.isna(latest_row.get("feedback_count")) else int(latest_row.get("feedback_count")),
+    )
+    col3.metric(
+        "Latest Accuracy",
+        "-" if pd.isna(latest_row.get("accuracy")) else f"{float(latest_row.get('accuracy')):.4f}",
+    )
+    col4.metric(
+        "Latest Weighted F1",
+        "-" if pd.isna(latest_row.get("f1_weighted")) else f"{float(latest_row.get('f1_weighted')):.4f}",
+    )
+
+    chart_df = history_df.sort_values("evaluated_at")
+
+    metric_chart_df = chart_df.melt(
+        id_vars=["evaluated_at", "run_id"],
+        value_vars=["accuracy", "f1_weighted"],
+        var_name="metric",
+        value_name="value",
+    ).dropna(subset=["value"])
+
+    if metric_chart_df.empty:
+        st.info("accuracy 또는 weighted F1 trend를 표시할 데이터가 없습니다.")
+    else:
+        fig = px.line(
+            metric_chart_df,
+            x="evaluated_at",
+            y="value",
+            color="metric",
+            markers=True,
+            title="Production feedback quality trend",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    count_chart_df = chart_df.dropna(subset=["feedback_count"])
+
+    if not count_chart_df.empty:
+        fig = px.bar(
+            count_chart_df,
+            x="evaluated_at",
+            y="feedback_count",
+            color="overall_status",
+            text="feedback_count",
+            title="Production feedback count by evaluation",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    status_df = (
+        history_df.groupby("overall_status")
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+
+    st.markdown("### Evaluation status distribution")
+    st.dataframe(
+        status_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### Raw evaluation history")
+    st.dataframe(
+        history_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def build_production_feedback_retraining_decision(
+    history_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    min_feedback_rows: int,
+    min_accuracy: float,
+    min_f1_weighted: float,
+    trend_drop_threshold: float,
+    min_history_points: int,
+) -> dict[str, object]:
+    if summary_df.empty:
+        return {
+            "candidate": False,
+            "status": "UNKNOWN",
+            "severity": "info",
+            "reasons": ["production feedback summary를 조회할 수 없습니다."],
+            "latest_feedback_count": 0,
+            "latest_accuracy": 0.0,
+            "latest_f1_weighted": 0.0,
+            "accuracy_delta": 0.0,
+            "f1_delta": 0.0,
+        }
+
+    summary = summary_df.iloc[0]
+    latest_feedback_count = int(summary.get("feedback_total") or 0)
+    latest_accuracy = float(summary.get("accuracy") or 0.0)
+
+    latest_f1_weighted = 0.0
+    latest_status = "UNKNOWN"
+    accuracy_delta = 0.0
+    f1_delta = 0.0
+    reasons: list[str] = []
+
+    if not history_df.empty:
+        latest_history = history_df.iloc[0]
+        latest_status = str(latest_history.get("overall_status") or "UNKNOWN")
+
+        if not pd.isna(latest_history.get("f1_weighted")):
+            latest_f1_weighted = float(latest_history.get("f1_weighted"))
+
+        trend_df = history_df.sort_values("evaluated_at").dropna(
+            subset=["accuracy", "f1_weighted"]
+        )
+
+        if len(trend_df) >= min_history_points:
+            previous_row = trend_df.iloc[-min_history_points]
+            current_row = trend_df.iloc[-1]
+
+            accuracy_delta = float(current_row["accuracy"]) - float(previous_row["accuracy"])
+            f1_delta = float(current_row["f1_weighted"]) - float(previous_row["f1_weighted"])
+
+            if accuracy_delta <= -trend_drop_threshold:
+                reasons.append(
+                    "최근 평가 이력 기준 accuracy가 "
+                    f"{abs(accuracy_delta):.4f} 이상 하락했습니다."
+                )
+
+            if f1_delta <= -trend_drop_threshold:
+                reasons.append(
+                    "최근 평가 이력 기준 weighted F1이 "
+                    f"{abs(f1_delta):.4f} 이상 하락했습니다."
+                )
+
+    if latest_feedback_count < min_feedback_rows:
+        return {
+            "candidate": False,
+            "status": "INSUFFICIENT_FEEDBACK",
+            "severity": "info",
+            "reasons": [
+                "재학습 후보 판단에 필요한 feedback 수가 부족합니다. "
+                f"현재 {latest_feedback_count}건, 기준 {min_feedback_rows}건입니다."
+            ],
+            "latest_feedback_count": latest_feedback_count,
+            "latest_accuracy": latest_accuracy,
+            "latest_f1_weighted": latest_f1_weighted,
+            "accuracy_delta": accuracy_delta,
+            "f1_delta": f1_delta,
+        }
+
+    if latest_accuracy < min_accuracy:
+        reasons.append(
+            f"production accuracy가 기준보다 낮습니다. "
+            f"현재 {latest_accuracy:.4f}, 기준 {min_accuracy:.4f}입니다."
+        )
+
+    if latest_f1_weighted < min_f1_weighted:
+        reasons.append(
+            f"production weighted F1이 기준보다 낮습니다. "
+            f"현재 {latest_f1_weighted:.4f}, 기준 {min_f1_weighted:.4f}입니다."
+        )
+
+    if latest_status == "FAIL":
+        reasons.append("최신 PRODUCTION_FEEDBACK 평가 상태가 FAIL입니다.")
+
+    candidate = bool(reasons)
+
+    return {
+        "candidate": candidate,
+        "status": "RETRAINING_CANDIDATE" if candidate else "STABLE",
+        "severity": "warning" if candidate else "success",
+        "reasons": reasons or ["현재 기준에서는 재학습 후보로 판단되지 않습니다."],
+        "latest_feedback_count": latest_feedback_count,
+        "latest_accuracy": latest_accuracy,
+        "latest_f1_weighted": latest_f1_weighted,
+        "accuracy_delta": accuracy_delta,
+        "f1_delta": f1_delta,
+    }
+
+
+
+def insert_retraining_candidate_check_result(
+    conn,
+    check_name: str,
+    status: str,
+    metric_value: float,
+    threshold_value: float,
+    message: str,
+    run_id: str,
+) -> None:
+    conn.execute(
+        text(
+            """
+            INSERT INTO pipeline_check_results (
+                check_type,
+                check_name,
+                status,
+                metric_value,
+                threshold_value,
+                message,
+                dag_id,
+                task_id,
+                run_id,
+                checked_at
+            )
+            VALUES (
+                'RETRAINING_CANDIDATE',
+                :check_name,
+                :status,
+                :metric_value,
+                :threshold_value,
+                :message,
+                'dashboard',
+                'save_retraining_candidate_decision',
+                :run_id,
+                NOW()
+            )
+            """
+        ),
+        {
+            "check_name": check_name,
+            "status": status,
+            "metric_value": metric_value,
+            "threshold_value": threshold_value,
+            "message": message,
+            "run_id": run_id,
+        },
+    )
+
+
+def save_retraining_candidate_decision(
+    decision: dict[str, object],
+    min_feedback_rows: int,
+    min_accuracy: float,
+    min_f1_weighted: float,
+    trend_drop_threshold: float,
+    min_history_points: int,
+) -> str:
+    engine = get_engine()
+    run_id = f"dashboard_retraining__{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+
+    candidate = bool(decision.get("candidate"))
+    decision_status = str(decision.get("status") or "UNKNOWN")
+    latest_feedback_count = float(decision.get("latest_feedback_count") or 0.0)
+    latest_accuracy = float(decision.get("latest_accuracy") or 0.0)
+    latest_f1_weighted = float(decision.get("latest_f1_weighted") or 0.0)
+    accuracy_delta = float(decision.get("accuracy_delta") or 0.0)
+    f1_delta = float(decision.get("f1_delta") or 0.0)
+    reasons = decision.get("reasons") or []
+    reason_text = " | ".join(str(reason) for reason in reasons)
+
+    if decision_status == "INSUFFICIENT_FEEDBACK":
+        overall_status = "SKIPPED"
+    elif candidate:
+        overall_status = "FAIL"
+    else:
+        overall_status = "PASS"
+
+    feedback_count_status = (
+        "PASS" if latest_feedback_count >= float(min_feedback_rows) else "SKIPPED"
+    )
+    accuracy_status = "PASS" if latest_accuracy >= float(min_accuracy) else "FAIL"
+    f1_status = "PASS" if latest_f1_weighted >= float(min_f1_weighted) else "FAIL"
+    accuracy_trend_status = (
+        "FAIL" if accuracy_delta <= -float(trend_drop_threshold) else "PASS"
+    )
+    f1_trend_status = (
+        "FAIL" if f1_delta <= -float(trend_drop_threshold) else "PASS"
+    )
+
+    with engine.begin() as conn:
+        insert_retraining_candidate_check_result(
+            conn=conn,
+            check_name="retraining_candidate_flag",
+            status=overall_status,
+            metric_value=1.0 if candidate else 0.0,
+            threshold_value=0.0,
+            message=(
+                f"decision={decision_status}, candidate={candidate}, "
+                f"history_points={min_history_points}, reasons={reason_text}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_retraining_candidate_check_result(
+            conn=conn,
+            check_name="retraining_feedback_count",
+            status=feedback_count_status,
+            metric_value=latest_feedback_count,
+            threshold_value=float(min_feedback_rows),
+            message=(
+                f"feedback_count={latest_feedback_count:.0f}, "
+                f"required={min_feedback_rows}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_retraining_candidate_check_result(
+            conn=conn,
+            check_name="retraining_accuracy",
+            status=accuracy_status,
+            metric_value=latest_accuracy,
+            threshold_value=float(min_accuracy),
+            message=(
+                f"production_accuracy={latest_accuracy:.4f}, "
+                f"threshold={min_accuracy:.4f}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_retraining_candidate_check_result(
+            conn=conn,
+            check_name="retraining_f1_weighted",
+            status=f1_status,
+            metric_value=latest_f1_weighted,
+            threshold_value=float(min_f1_weighted),
+            message=(
+                f"production_f1_weighted={latest_f1_weighted:.4f}, "
+                f"threshold={min_f1_weighted:.4f}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_retraining_candidate_check_result(
+            conn=conn,
+            check_name="retraining_accuracy_delta",
+            status=accuracy_trend_status,
+            metric_value=accuracy_delta,
+            threshold_value=-float(trend_drop_threshold),
+            message=(
+                f"accuracy_delta={accuracy_delta:.4f}, "
+                f"drop_threshold=-{trend_drop_threshold:.4f}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_retraining_candidate_check_result(
+            conn=conn,
+            check_name="retraining_f1_delta",
+            status=f1_trend_status,
+            metric_value=f1_delta,
+            threshold_value=-float(trend_drop_threshold),
+            message=(
+                f"f1_delta={f1_delta:.4f}, "
+                f"drop_threshold=-{trend_drop_threshold:.4f}"
+            ),
+            run_id=run_id,
+        )
+
+    return run_id
+
+
+def fetch_latest_retraining_candidate_checks(limit: int = 30) -> pd.DataFrame:
+    if not dashboard_table_exists("pipeline_check_results"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            check_name,
+            status,
+            ROUND(metric_value::numeric, 4) AS metric_value,
+            ROUND(threshold_value::numeric, 4) AS threshold_value,
+            message,
+            run_id,
+            checked_at
+        FROM pipeline_check_results
+        WHERE check_type = 'RETRAINING_CANDIDATE'
+        ORDER BY checked_at DESC, id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+def render_production_feedback_retraining_candidate_section(
+    history_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    wrong_df: pd.DataFrame,
+    confusion_df: pd.DataFrame,
+) -> None:
+    st.subheader("Retraining Candidate")
+
+    st.caption(
+        "production feedback 평가 결과와 평가 이력 추세를 기준으로 "
+        "현재 모델을 재학습 후보로 볼지 판단합니다. "
+        "이 기능은 자동 재학습을 실행하지 않고, 운영 판단 근거를 제공합니다."
+    )
+
+    with st.expander("판단 기준 설정", expanded=False):
+        col1, col2, col3, col4, col5 = st.columns(5)
+
+        min_feedback_rows = col1.number_input(
+            "min feedback rows",
+            key="retraining_candidate_min_feedback_rows",
+            min_value=1,
+            max_value=10000,
+            value=get_dashboard_int_env("MIN_PRODUCTION_FEEDBACK_ROWS", 10),
+            step=1,
+        )
+
+        min_accuracy = col2.number_input(
+            "min accuracy",
+            key="retraining_candidate_min_accuracy",
+            min_value=0.0,
+            max_value=1.0,
+            value=get_dashboard_float_env("MIN_PRODUCTION_ACCURACY", 0.70),
+            step=0.01,
+            format="%.2f",
+        )
+
+        min_f1_weighted = col3.number_input(
+            "min weighted F1",
+            key="retraining_candidate_min_f1_weighted",
+            min_value=0.0,
+            max_value=1.0,
+            value=get_dashboard_float_env("MIN_PRODUCTION_F1_WEIGHTED", 0.70),
+            step=0.01,
+            format="%.2f",
+        )
+
+        trend_drop_threshold = col4.number_input(
+            "trend drop threshold",
+            key="retraining_candidate_trend_drop_threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=get_dashboard_float_env("PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD", 0.05),
+            step=0.01,
+            format="%.2f",
+        )
+
+        min_history_points = col5.number_input(
+            "history points",
+            key="retraining_candidate_min_history_points",
+            min_value=2,
+            max_value=20,
+            value=get_dashboard_int_env("PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS", 3),
+            step=1,
+        )
+
+    decision = build_production_feedback_retraining_decision(
+        history_df=history_df,
+        summary_df=summary_df,
+        min_feedback_rows=int(min_feedback_rows),
+        min_accuracy=float(min_accuracy),
+        min_f1_weighted=float(min_f1_weighted),
+        trend_drop_threshold=float(trend_drop_threshold),
+        min_history_points=int(min_history_points),
+    )
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Decision", str(decision["status"]))
+    col2.metric("Feedback", int(decision["latest_feedback_count"]))
+    col3.metric("Accuracy", f"{float(decision['latest_accuracy']):.4f}")
+    col4.metric("Weighted F1", f"{float(decision['latest_f1_weighted']):.4f}")
+    col5.metric("F1 Delta", f"{float(decision['f1_delta']):.4f}")
+
+    if decision["candidate"]:
+        st.warning("현재 모델은 production feedback 기준 재학습 후보입니다.")
+    elif decision["status"] == "INSUFFICIENT_FEEDBACK":
+        st.info("아직 재학습 후보 판단에 필요한 feedback 수가 부족합니다.")
+    else:
+        st.success("현재 기준에서는 재학습 후보로 판단되지 않습니다.")
+
+    st.markdown("### 판단 근거")
+    for reason in decision["reasons"]:
+        st.write(f"- {reason}")
+
+    st.markdown("### 판단 결과 저장")
+    st.caption(
+        "현재 화면의 재학습 후보 판단 결과를 pipeline_check_results에 "
+        "RETRAINING_CANDIDATE check_type으로 저장합니다."
+    )
+
+    if st.button(
+        "Save retraining candidate decision",
+        key="save_retraining_candidate_decision_button",
+        type="primary",
+    ):
+        saved_run_id = save_retraining_candidate_decision(
+            decision=decision,
+            min_feedback_rows=int(min_feedback_rows),
+            min_accuracy=float(min_accuracy),
+            min_f1_weighted=float(min_f1_weighted),
+            trend_drop_threshold=float(trend_drop_threshold),
+            min_history_points=int(min_history_points),
+        )
+        st.success(f"Retraining candidate decision saved. run_id={saved_run_id}")
+
+    latest_retraining_checks_df = fetch_latest_retraining_candidate_checks()
+
+    if latest_retraining_checks_df.empty:
+        st.info("아직 저장된 RETRAINING_CANDIDATE 판단 이력이 없습니다.")
+    else:
+        st.markdown("### 최근 저장된 재학습 후보 판단 이력")
+        st.dataframe(
+            latest_retraining_checks_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if decision["candidate"]:
+        st.markdown("### 권장 조치")
+        st.write("1. 오분류가 특정 클래스에 집중되는지 확인합니다.")
+        st.write("2. feedback_source가 sample 중심인지 실제 운영 feedback 중심인지 확인합니다.")
+        st.write("3. 실제 운영 feedback 기준 저하라면 재학습 또는 rollback을 검토합니다.")
+
+        st.code(
+            """
+make production-feedback-check
+make dag-trigger
+make model-lifecycle-check
+""".strip(),
+            language="bash",
+        )
+
+        st.markdown("### rollback 검토 명령어")
+        st.code(
+            """
+make model-rollback-plan
+MODEL_ROLLBACK_ARCHIVE_ID=<archive_id> make model-rollback
+curl -X POST http://localhost:8000/reload-model
+""".strip(),
+            language="bash",
+        )
+    else:
+        st.markdown("### 다음 확인")
+        st.code(
+            """
+make production-feedback-check
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_production_feedback"
+""".strip(),
+            language="bash",
+        )
+
+    if not wrong_df.empty:
+        st.markdown("### 최근 오분류 샘플")
+        st.dataframe(
+            wrong_df.head(20),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if not confusion_df.empty:
+        st.markdown("### 오분류 집중도")
+        wrong_confusion_df = confusion_df[
+            confusion_df["actual_category"] != confusion_df["predicted_category"]
+        ]
+
+        if wrong_confusion_df.empty:
+            st.success("confusion table 기준 오분류 집중 패턴이 없습니다.")
+        else:
+            st.dataframe(
+                wrong_confusion_df.sort_values("count", ascending=False).head(20),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
+def fetch_recent_production_feedbacks(limit: int = 100) -> pd.DataFrame:
+    if not dashboard_table_exists("prediction_feedbacks"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            pf.id AS feedback_id,
+            pf.prediction_id,
+            mp.predicted_category,
+            pf.actual_category,
+            CASE
+                WHEN mp.predicted_category = pf.actual_category THEN 'CORRECT'
+                ELSE 'WRONG'
+            END AS result,
+            ROUND(mp.confidence::numeric, 4) AS confidence,
+            pf.feedback_source,
+            pf.feedback_note,
+            pf.created_by,
+            pf.updated_at
+        FROM prediction_feedbacks pf
+        JOIN model_predictions mp
+            ON pf.prediction_id = mp.id
+        ORDER BY pf.updated_at DESC, pf.id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def fetch_wrong_production_feedbacks(limit: int = 100) -> pd.DataFrame:
+    if not dashboard_table_exists("prediction_feedbacks"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            pf.prediction_id,
+            mp.predicted_category,
+            pf.actual_category,
+            ROUND(mp.confidence::numeric, 4) AS confidence,
+            pf.feedback_source,
+            pf.feedback_note,
+            pf.created_by,
+            pf.updated_at
+        FROM prediction_feedbacks pf
+        JOIN model_predictions mp
+            ON pf.prediction_id = mp.id
+        WHERE mp.predicted_category <> pf.actual_category
+        ORDER BY pf.updated_at DESC, pf.id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def fetch_production_feedback_confusion() -> pd.DataFrame:
+    if not dashboard_table_exists("prediction_feedbacks"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            pf.actual_category,
+            mp.predicted_category,
+            COUNT(*) AS count
+        FROM prediction_feedbacks pf
+        JOIN model_predictions mp
+            ON pf.prediction_id = mp.id
+        GROUP BY
+            pf.actual_category,
+            mp.predicted_category
+        ORDER BY pf.actual_category, count DESC
+    """)
+
+
+def fetch_production_feedback_sources() -> pd.DataFrame:
+    if not dashboard_table_exists("prediction_feedbacks"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            feedback_source,
+            created_by,
+            COUNT(*) AS count
+        FROM prediction_feedbacks
+        GROUP BY
+            feedback_source,
+            created_by
+        ORDER BY count DESC
+    """)
+
+
+PRODUCTION_FEEDBACK_LABELS = [
+    "Data Engineer",
+    "Backend Engineer",
+    "ML Engineer",
+    "DevOps Engineer",
+    "Data Analyst",
+    "Unknown",
+]
+
+
+def fetch_predictions_for_feedback(limit: int = 100) -> pd.DataFrame:
+    if not dashboard_table_exists("model_predictions"):
+        return pd.DataFrame()
+
+    if not dashboard_table_exists("prediction_feedbacks"):
+        return pd.DataFrame()
+
+    return read_sql("""
+        SELECT
+            mp.id AS prediction_id,
+            mp.prediction_source,
+            mp.job_post_id,
+            mp.predicted_category,
+            ROUND(mp.confidence::numeric, 4) AS confidence,
+            mp.confidence_level,
+            mp.is_low_confidence,
+            mp.model_name,
+            mp.model_run_id,
+            mp.model_registry_id,
+            mp.predicted_at,
+            pf.actual_category AS current_actual_category,
+            pf.feedback_source AS current_feedback_source,
+            pf.created_by AS current_feedback_created_by,
+            pf.updated_at AS feedback_updated_at
+        FROM model_predictions mp
+        LEFT JOIN prediction_feedbacks pf
+            ON pf.prediction_id = mp.id
+        ORDER BY mp.id DESC
+        LIMIT :limit
+    """, params={"limit": limit})
+
+
+def format_prediction_feedback_option(row: pd.Series) -> str:
+    prediction_id = row.get("prediction_id")
+    prediction_source = row.get("prediction_source") or "unknown"
+    predicted_category = row.get("predicted_category") or "Unknown"
+    confidence = row.get("confidence")
+    current_actual_category = row.get("current_actual_category")
+
+    if pd.isna(confidence):
+        confidence_text = "-"
+    else:
+        confidence_text = str(confidence)
+
+    if pd.isna(current_actual_category) or not current_actual_category:
+        actual_text = "not_set"
+    else:
+        actual_text = str(current_actual_category)
+
+    return (
+        f"id={prediction_id} | "
+        f"source={prediction_source} | "
+        f"predicted={predicted_category} | "
+        f"actual={actual_text} | "
+        f"confidence={confidence_text}"
+    )
+
+
+def get_feedback_label_index(label: str | None) -> int:
+    if label in PRODUCTION_FEEDBACK_LABELS:
+        return PRODUCTION_FEEDBACK_LABELS.index(label)
+
+    return PRODUCTION_FEEDBACK_LABELS.index("Unknown")
+
+
+def upsert_prediction_feedback(
+    prediction_id: int,
+    actual_category: str,
+    feedback_source: str,
+    feedback_note: str | None,
+    created_by: str,
+) -> None:
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO prediction_feedbacks (
+                    prediction_id,
+                    actual_category,
+                    feedback_source,
+                    feedback_note,
+                    created_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :prediction_id,
+                    :actual_category,
+                    :feedback_source,
+                    :feedback_note,
+                    :created_by,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (prediction_id)
+                DO UPDATE SET
+                    actual_category = EXCLUDED.actual_category,
+                    feedback_source = EXCLUDED.feedback_source,
+                    feedback_note = EXCLUDED.feedback_note,
+                    created_by = EXCLUDED.created_by,
+                    updated_at = NOW()
+                """
+            ),
+            {
+                "prediction_id": prediction_id,
+                "actual_category": actual_category,
+                "feedback_source": feedback_source,
+                "feedback_note": feedback_note,
+                "created_by": created_by,
+            },
+        )
+
+
+def get_dashboard_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+
+    if raw_value is None or raw_value.strip() == "":
+        return default
+
+    return int(raw_value)
+
+
+def get_dashboard_float_env(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+
+    if raw_value is None or raw_value.strip() == "":
+        return default
+
+    return float(raw_value)
+
+
+def calculate_weighted_f1_score(actual_values: list[str], predicted_values: list[str]) -> float:
+    if not actual_values:
+        return 0.0
+
+    labels = sorted(set(actual_values) | set(predicted_values))
+    total_support = len(actual_values)
+    weighted_f1_sum = 0.0
+
+    for label in labels:
+        true_positive = sum(
+            1
+            for actual, predicted in zip(actual_values, predicted_values, strict=False)
+            if actual == label and predicted == label
+        )
+        false_positive = sum(
+            1
+            for actual, predicted in zip(actual_values, predicted_values, strict=False)
+            if actual != label and predicted == label
+        )
+        false_negative = sum(
+            1
+            for actual, predicted in zip(actual_values, predicted_values, strict=False)
+            if actual == label and predicted != label
+        )
+        support = sum(1 for actual in actual_values if actual == label)
+
+        precision = (
+            true_positive / (true_positive + false_positive)
+            if true_positive + false_positive > 0
+            else 0.0
+        )
+        recall = (
+            true_positive / (true_positive + false_negative)
+            if true_positive + false_negative > 0
+            else 0.0
+        )
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if precision + recall > 0
+            else 0.0
+        )
+
+        weighted_f1_sum += f1 * support
+
+    return weighted_f1_sum / total_support
+
+
+def insert_production_feedback_check_result(
+    conn,
+    check_name: str,
+    status: str,
+    metric_value: float,
+    threshold_value: float,
+    message: str,
+    run_id: str,
+) -> None:
+    conn.execute(
+        text(
+            """
+            INSERT INTO pipeline_check_results (
+                check_type,
+                check_name,
+                status,
+                metric_value,
+                threshold_value,
+                message,
+                dag_id,
+                task_id,
+                run_id,
+                checked_at
+            )
+            VALUES (
+                'PRODUCTION_FEEDBACK',
+                :check_name,
+                :status,
+                :metric_value,
+                :threshold_value,
+                :message,
+                'dashboard',
+                'run_production_feedback_evaluation',
+                :run_id,
+                NOW()
+            )
+            """
+        ),
+        {
+            "check_name": check_name,
+            "status": status,
+            "metric_value": metric_value,
+            "threshold_value": threshold_value,
+            "message": message,
+            "run_id": run_id,
+        },
+    )
+
+
+def run_production_feedback_evaluation_from_dashboard(
+    min_feedback_rows: int,
+    min_accuracy: float,
+    min_f1_weighted: float,
+    feedback_window_days: int,
+) -> dict[str, object]:
+    engine = get_engine()
+    cutoff = datetime.now() - timedelta(days=feedback_window_days)
+    run_id = f"dashboard__{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT
+                    pf.prediction_id,
+                    pf.actual_category,
+                    mp.predicted_category,
+                    pf.updated_at
+                FROM prediction_feedbacks pf
+                JOIN model_predictions mp
+                    ON pf.prediction_id = mp.id
+                WHERE pf.updated_at >= :cutoff
+                ORDER BY pf.updated_at DESC, pf.id DESC
+                """
+            ),
+            {"cutoff": cutoff},
+        ).mappings().all()
+
+        feedback_count = len(rows)
+
+        if feedback_count < min_feedback_rows:
+            message = (
+                "Production feedback row count is not enough for evaluation. "
+                f"feedback_count={feedback_count}, "
+                f"required={min_feedback_rows}, "
+                f"window_days={feedback_window_days}"
+            )
+
+            insert_production_feedback_check_result(
+                conn=conn,
+                check_name="production_feedback_count",
+                status="SKIPPED",
+                metric_value=float(feedback_count),
+                threshold_value=float(min_feedback_rows),
+                message=message,
+                run_id=run_id,
+            )
+
+            return {
+                "overall_status": "SKIPPED",
+                "run_id": run_id,
+                "feedback_count": feedback_count,
+                "min_feedback_rows": min_feedback_rows,
+                "accuracy": None,
+                "min_accuracy": min_accuracy,
+                "f1_weighted": None,
+                "min_f1_weighted": min_f1_weighted,
+                "window_days": feedback_window_days,
+                "message": message,
+            }
+
+        actual_values = [str(row["actual_category"]) for row in rows]
+        predicted_values = [str(row["predicted_category"]) for row in rows]
+
+        correct_count = sum(
+            1
+            for actual, predicted in zip(actual_values, predicted_values, strict=False)
+            if actual == predicted
+        )
+        accuracy = correct_count / feedback_count
+        f1_weighted = calculate_weighted_f1_score(actual_values, predicted_values)
+
+        accuracy_status = "PASS" if accuracy >= min_accuracy else "FAIL"
+        f1_status = "PASS" if f1_weighted >= min_f1_weighted else "FAIL"
+        overall_status = (
+            "PASS"
+            if accuracy_status == "PASS" and f1_status == "PASS"
+            else "FAIL"
+        )
+
+        insert_production_feedback_check_result(
+            conn=conn,
+            check_name="production_feedback_count",
+            status="PASS",
+            metric_value=float(feedback_count),
+            threshold_value=float(min_feedback_rows),
+            message=(
+                "Production feedback row count is sufficient. "
+                f"feedback_count={feedback_count}, required={min_feedback_rows}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_production_feedback_check_result(
+            conn=conn,
+            check_name="production_accuracy",
+            status=accuracy_status,
+            metric_value=float(accuracy),
+            threshold_value=float(min_accuracy),
+            message=(
+                f"Production feedback accuracy={accuracy:.4f}, "
+                f"threshold={min_accuracy:.4f}, feedback_count={feedback_count}"
+            ),
+            run_id=run_id,
+        )
+
+        insert_production_feedback_check_result(
+            conn=conn,
+            check_name="production_f1_weighted",
+            status=f1_status,
+            metric_value=float(f1_weighted),
+            threshold_value=float(min_f1_weighted),
+            message=(
+                f"Production feedback weighted_f1={f1_weighted:.4f}, "
+                f"threshold={min_f1_weighted:.4f}, feedback_count={feedback_count}"
+            ),
+            run_id=run_id,
+        )
+
+    return {
+        "overall_status": overall_status,
+        "run_id": run_id,
+        "feedback_count": feedback_count,
+        "min_feedback_rows": min_feedback_rows,
+        "accuracy": round(accuracy, 4),
+        "min_accuracy": min_accuracy,
+        "f1_weighted": round(f1_weighted, 4),
+        "min_f1_weighted": min_f1_weighted,
+        "window_days": feedback_window_days,
+        "message": "Production feedback evaluation completed.",
+    }
+
+
+def render_production_feedback_evaluation_runner_section() -> None:
+    st.subheader("Run Production Feedback Evaluation")
+
+    st.caption(
+        "Dashboard에서 현재 prediction feedback을 기준으로 production accuracy와 "
+        "weighted F1을 계산하고 pipeline_check_results에 저장합니다. "
+        "CLI의 `make production-feedback-check`와 같은 운영 확인 용도입니다."
+    )
+
+    default_min_feedback_rows = get_dashboard_int_env(
+        "MIN_PRODUCTION_FEEDBACK_ROWS",
+        10,
+    )
+    default_min_accuracy = get_dashboard_float_env(
+        "MIN_PRODUCTION_ACCURACY",
+        0.70,
+    )
+    default_min_f1_weighted = get_dashboard_float_env(
+        "MIN_PRODUCTION_F1_WEIGHTED",
+        0.70,
+    )
+    default_window_days = get_dashboard_int_env(
+        "PRODUCTION_FEEDBACK_WINDOW_DAYS",
+        30,
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    min_feedback_rows = col1.number_input(
+        "min feedback rows",
+        min_value=1,
+        max_value=10000,
+        value=default_min_feedback_rows,
+        step=1,
+    )
+    min_accuracy = col2.number_input(
+        "min accuracy",
+        min_value=0.0,
+        max_value=1.0,
+        value=default_min_accuracy,
+        step=0.01,
+        format="%.2f",
+    )
+    min_f1_weighted = col3.number_input(
+        "min weighted F1",
+        min_value=0.0,
+        max_value=1.0,
+        value=default_min_f1_weighted,
+        step=0.01,
+        format="%.2f",
+    )
+    feedback_window_days = col4.number_input(
+        "window days",
+        min_value=1,
+        max_value=365,
+        value=default_window_days,
+        step=1,
+    )
+
+    if "production_feedback_last_evaluation" in st.session_state:
+        st.markdown("### Last dashboard evaluation result")
+        st.json(st.session_state["production_feedback_last_evaluation"])
+
+    if st.button(
+        "Run production feedback evaluation",
+        type="primary",
+    ):
+        try:
+            result = run_production_feedback_evaluation_from_dashboard(
+                min_feedback_rows=int(min_feedback_rows),
+                min_accuracy=float(min_accuracy),
+                min_f1_weighted=float(min_f1_weighted),
+                feedback_window_days=int(feedback_window_days),
+            )
+        except Exception as exc:
+            st.error(f"Production feedback evaluation failed: {exc}")
+            return
+
+        st.session_state["production_feedback_last_evaluation"] = result
+        st.cache_data.clear()
+        st.rerun()
+
+    st.markdown("### CLI equivalent")
+    st.code(
+        "make production-feedback-check",
+        language="bash",
+    )
+
+
+def render_production_feedback_input_section() -> None:
+    st.subheader("Create or Update Prediction Feedback")
+
+    st.caption(
+        "최근 prediction을 선택한 뒤 실제 정답 label을 저장합니다. "
+        "이미 feedback이 있는 prediction은 같은 prediction_id 기준으로 update됩니다."
+    )
+
+    candidate_df = fetch_predictions_for_feedback(limit=100)
+
+    if candidate_df.empty:
+        st.info("feedback을 입력할 prediction이 없습니다. 먼저 API sample 또는 batch inference를 실행하세요.")
+        st.code("make api-sample", language="bash")
+        return
+
+    selected_index = st.selectbox(
+        "Feedback 대상 prediction",
+        options=candidate_df.index.tolist(),
+        format_func=lambda index: format_prediction_feedback_option(
+            candidate_df.loc[index]
+        ),
+        key="production_feedback_prediction_target",
+    )
+
+    selected_prediction = candidate_df.loc[selected_index]
+
+    st.dataframe(
+        pd.DataFrame([selected_prediction.to_dict()]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    default_label = selected_prediction.get("current_actual_category")
+
+    if pd.isna(default_label) or not default_label:
+        default_label = selected_prediction.get("predicted_category")
+
+    with st.form("production_feedback_input_form", clear_on_submit=False):
+        actual_category = st.selectbox(
+            "actual_category",
+            options=PRODUCTION_FEEDBACK_LABELS,
+            index=get_feedback_label_index(str(default_label)),
+            help="운영 feedback 기준 실제 정답 label입니다.",
+        )
+
+        feedback_source = st.selectbox(
+            "feedback_source",
+            options=[
+                "manual",
+                "review",
+                "ground_truth",
+                "sample",
+            ],
+            index=0,
+            help="manual/review는 사람이 검토한 feedback, sample은 테스트용 feedback입니다.",
+        )
+
+        created_by = st.text_input(
+            "created_by",
+            value=os.getenv("USER", "local-user"),
+        )
+
+        feedback_note = st.text_area(
+            "feedback_note",
+            placeholder=(
+                "예: 실제로는 Data Engineer 공고인데 Backend Engineer로 예측됨. "
+                "Kafka/Spark/ETL 키워드가 description에 포함되어 있음."
+            ),
+            height=120,
+        )
+
+        submitted = st.form_submit_button("Save production feedback")
+
+        if submitted:
+            upsert_prediction_feedback(
+                prediction_id=int(selected_prediction["prediction_id"]),
+                actual_category=actual_category,
+                feedback_source=feedback_source,
+                feedback_note=feedback_note.strip() or None,
+                created_by=created_by.strip() or "local-user",
+            )
+
+            st.success(
+                f"prediction_id={int(selected_prediction['prediction_id'])} feedback saved."
+            )
+            st.cache_data.clear()
+            st.rerun()
+
+
+def get_latest_production_feedback_metric(
+    checks_df: pd.DataFrame,
+    check_name: str,
+    default: float = 0.0,
+) -> float:
+    if checks_df.empty:
+        return default
+
+    target_df = checks_df[checks_df["check_name"] == check_name]
+
+    if target_df.empty:
+        return default
+
+    value = target_df.iloc[0]["metric_value"]
+
+    if pd.isna(value):
+        return default
+
+    return float(value)
+
+
+def get_latest_production_feedback_status(
+    checks_df: pd.DataFrame,
+    check_name: str,
+    default: str = "UNKNOWN",
+) -> str:
+    if checks_df.empty:
+        return default
+
+    target_df = checks_df[checks_df["check_name"] == check_name]
+
+    if target_df.empty:
+        return default
+
+    value = target_df.iloc[0]["status"]
+
+    if pd.isna(value):
+        return default
+
+    return str(value)
+
+
+def render_production_feedback_section() -> None:
+    st.header("Production Feedback")
+
+    st.caption(
+        "운영 예측 결과에 연결된 feedback을 기준으로 모델의 production accuracy, "
+        "weighted F1, 오분류, confusion table, feedback source 분포를 확인합니다."
+    )
+
+    if not dashboard_table_exists("prediction_feedbacks"):
+        st.warning("prediction_feedbacks 테이블이 아직 생성되지 않았습니다.")
+
+        st.code(
+            """
+make create-tables
+make api-sample
+make production-feedback-sample
+make production-feedback-check
+docker compose up -d --force-recreate dashboard
+""".strip(),
+            language="bash",
+        )
+        return
+
+    summary_df = fetch_production_feedback_summary()
+    checks_df = fetch_latest_production_feedback_checks()
+    history_df = fetch_production_feedback_evaluation_history()
+    recent_df = fetch_recent_production_feedbacks()
+    wrong_df = fetch_wrong_production_feedbacks()
+    confusion_df = fetch_production_feedback_confusion()
+    source_df = fetch_production_feedback_sources()
+
+    if summary_df.empty:
+        st.info("Production feedback summary를 조회할 수 없습니다.")
+        return
+
+    summary = summary_df.iloc[0]
+
+    feedback_total = int(summary.get("feedback_total") or 0)
+    correct_count = int(summary.get("correct_count") or 0)
+    incorrect_count = int(summary.get("incorrect_count") or 0)
+    accuracy = float(summary.get("accuracy") or 0.0)
+
+    latest_f1_weighted = get_latest_production_feedback_metric(
+        checks_df,
+        "production_f1_weighted",
+        default=0.0,
+    )
+    latest_accuracy_status = get_latest_production_feedback_status(
+        checks_df,
+        "production_accuracy",
+    )
+    latest_f1_status = get_latest_production_feedback_status(
+        checks_df,
+        "production_f1_weighted",
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Total Feedback", f"{feedback_total:,}")
+    col2.metric(
+        "Production Accuracy",
+        f"{accuracy:.4f}",
+        help=f"Latest check status: {latest_accuracy_status}",
+    )
+    col3.metric(
+        "Production Weighted F1",
+        f"{latest_f1_weighted:.4f}",
+        help=f"Latest check status: {latest_f1_status}",
+    )
+    col4.metric(
+        "Incorrect Predictions",
+        f"{incorrect_count:,}",
+        delta=f"Correct {correct_count:,}",
+    )
+
+    if feedback_total == 0:
+        st.info(
+            "아직 feedback 데이터가 없습니다. "
+            "Feedback Input 탭에서 직접 입력하거나 샘플 feedback을 생성하세요."
+        )
+
+        st.code(
+            """
+make api-sample
+make production-feedback-sample
+make production-feedback-check
+docker compose up -d --force-recreate dashboard
+""".strip(),
+            language="bash",
+        )
+
+    st.divider()
+
+    feedback_tab1, feedback_tab2, feedback_tab3, feedback_tab4, feedback_tab5, feedback_tab6, feedback_tab7, feedback_tab8, feedback_tab9 = st.tabs(
+        [
+            "Feedback Input",
+            "Evaluation Runner",
+            "Evaluation History",
+            "Retraining Candidate",
+            "Recent Feedback",
+            "Wrong Predictions",
+            "Confusion Table",
+            "Feedback Source",
+            "Evaluation Checks",
+        ]
+    )
+
+    with feedback_tab1:
+        render_production_feedback_input_section()
+
+    with feedback_tab2:
+        render_production_feedback_evaluation_runner_section()
+
+    with feedback_tab3:
+        render_production_feedback_evaluation_history_section(history_df)
+
+    with feedback_tab4:
+        render_production_feedback_retraining_candidate_section(
+            history_df=history_df,
+            summary_df=summary_df,
+            wrong_df=wrong_df,
+            confusion_df=confusion_df,
+        )
+
+    with feedback_tab5:
+        st.subheader("Recent Production Feedback")
+
+        if recent_df.empty:
+            st.info("최근 feedback 데이터가 없습니다.")
+        else:
+            st.dataframe(
+                recent_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with feedback_tab6:
+        st.subheader("Wrong Predictions")
+
+        if wrong_df.empty:
+            st.success("현재 feedback 기준 오분류가 없습니다.")
+        else:
+            st.dataframe(
+                wrong_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with feedback_tab7:
+        st.subheader("Actual Category vs Predicted Category")
+
+        if confusion_df.empty:
+            st.info("Confusion table을 표시할 데이터가 없습니다.")
+        else:
+            confusion_pivot = confusion_df.pivot_table(
+                index="actual_category",
+                columns="predicted_category",
+                values="count",
+                aggfunc="sum",
+                fill_value=0,
+            )
+
+            st.dataframe(
+                confusion_pivot,
+                use_container_width=True,
+            )
+
+            st.markdown("### Raw confusion rows")
+            st.dataframe(
+                confusion_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with feedback_tab8:
+        st.subheader("Feedback Source Distribution")
+
+        if source_df.empty:
+            st.info("feedback source 데이터가 없습니다.")
+        else:
+            source_summary_df = (
+                source_df.groupby("feedback_source", as_index=False)["count"]
+                .sum()
+                .sort_values("count", ascending=False)
+            )
+
+            fig = px.bar(
+                source_summary_df,
+                x="feedback_source",
+                y="count",
+                text="count",
+                title="Production feedback count by source",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.dataframe(
+                source_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with feedback_tab9:
+        st.subheader("Latest Production Feedback Evaluation Checks")
+
+        if checks_df.empty:
+            st.info("아직 PRODUCTION_FEEDBACK 평가 결과가 없습니다.")
+            st.code("make production-feedback-check", language="bash")
+        else:
+            st.dataframe(
+                checks_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.markdown("### 수동 확인 명령어")
+        st.code(
+            """
+make production-feedback-check
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_production_feedback"
+""".strip(),
+            language="bash",
+        )
+
+
 def main():
     st.set_page_config(
         page_title="JobSkill MLOps Dashboard",
@@ -2279,10 +3871,11 @@ def main():
 
     render_metric_cards()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs(
         [
             "Model Lifecycle",
             "Model Evaluation",
+            "Production Feedback",
             "Model Card",
             "Data Quality",
             "Prediction Quality",
@@ -2302,30 +3895,33 @@ def main():
         render_model_evaluation_section()
 
     with tab3:
-        render_model_card_section()
+        render_production_feedback_section()
 
     with tab4:
-        render_source_quality()
+        render_model_card_section()
 
     with tab5:
-        render_prediction_quality()
+        render_source_quality()
 
     with tab6:
-        render_pipeline_checks()
+        render_prediction_quality()
 
     with tab7:
-        render_api_logs()
+        render_pipeline_checks()
 
     with tab8:
-        render_current_alerts_section()
+        render_api_logs()
 
     with tab9:
-        render_alert_history_section()
+        render_current_alerts_section()
 
     with tab10:
-        render_incident_report_section()
+        render_alert_history_section()
 
     with tab11:
+        render_incident_report_section()
+
+    with tab12:
         render_recent_predictions()
 
 if __name__ == "__main__":

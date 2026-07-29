@@ -79,6 +79,10 @@ check_command \
   "Compile FastAPI app" \
   python -m py_compile src/inference/api.py
 
+check_command \
+  "Compile Streamlit dashboard" \
+  "python -m py_compile src/dashboard/app.py"
+
 if test -f src/reporting/generate_incident_response_report.py; then
   check_command \
     "Compile incident response report" \

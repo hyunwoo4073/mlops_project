@@ -35,6 +35,10 @@ check_command \
   python -m py_compile src/inference/api.py
 
 check_command \
+  "Compile Streamlit dashboard" \
+  python -m py_compile src/dashboard/app.py
+
+check_command \
   "Compile monitoring metrics" \
   python -m py_compile src/monitoring/prometheus_metrics.py
 

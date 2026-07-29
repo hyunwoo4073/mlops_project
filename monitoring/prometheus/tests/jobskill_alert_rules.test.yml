@@ -298,3 +298,36 @@ tests:
               runbook_url: "http://localhost:8000/runbooks/jobskill_alertmanager_notification_failure.md"
               dashboard_url: "http://localhost:3000"
               prometheus_url: "http://localhost:9090/graph?g0.expr=sum%20by%20(receiver%2C%20integration)%20(increase(alertmanager_notifications_failed_total%5B5m%5D))"
+
+  - name: retraining_candidate_detected_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0 0 0 0 0 0 0'
+      - series: 'jobskill_retraining_candidate_flag'
+        values: '1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillRetrainingCandidateDetected
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: model-quality
+            exp_annotations:
+              summary: "재학습 후보 모델이 감지되었습니다"
+              description: "Production Feedback 기반 판단 결과 현재 promoted model이 재학습 후보로 분류되었습니다. 최근 feedback 정확도, Weighted F1, 하락 추세, 오분류 집중 패턴을 확인하고 재학습 또는 롤백 필요 여부를 검토하세요."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_retraining_candidate_detected.md"
+              dashboard_url: "http://localhost:3000"
+              prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_retraining_candidate_flag"
+
+  - name: retraining_candidate_should_be_suppressed_during_maintenance
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '1 1 1 1 1 1 1'
+      - series: 'jobskill_retraining_candidate_flag'
+        values: '1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillRetrainingCandidateDetected
+        exp_alerts: []
