@@ -42,6 +42,14 @@ required_metrics:
   - jobskill_production_feedback_f1_weighted
   - jobskill_production_feedback_category_total
 
+  # Retraining candidate metrics
+  - jobskill_retraining_candidate_flag
+  - jobskill_retraining_candidate_feedback_count
+  - jobskill_retraining_candidate_accuracy
+  - jobskill_retraining_candidate_f1_weighted
+  - jobskill_retraining_candidate_accuracy_delta
+  - jobskill_retraining_candidate_f1_delta
+
 external_metrics:
   alertmanager:
     url: http://localhost:9093/metrics
