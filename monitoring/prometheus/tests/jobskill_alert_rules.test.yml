@@ -299,13 +299,88 @@ tests:
               dashboard_url: "http://localhost:3000"
               prometheus_url: "http://localhost:9090/graph?g0.expr=sum%20by%20(receiver%2C%20integration)%20(increase(alertmanager_notifications_failed_total%5B5m%5D))"
 
+
+  - name: production_feedback_low_accuracy_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_production_feedback_total'
+        values: '10+0x10'
+      - series: 'jobskill_production_feedback_accuracy'
+        values: '0.6+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillProductionFeedbackLowAccuracy
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: model-quality
+            exp_annotations:
+              summary: "Production feedback accuracy is low"
+              description: "Production feedback accuracy is below the required threshold. Review recent prediction feedback records and consider retraining, rollback, or threshold adjustment."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_production_feedback_low_accuracy.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_production_feedback_accuracy"
+
+  - name: production_feedback_low_accuracy_should_be_suppressed_during_maintenance
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '1+0x10'
+      - series: 'jobskill_production_feedback_total'
+        values: '10+0x10'
+      - series: 'jobskill_production_feedback_accuracy'
+        values: '0.6+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillProductionFeedbackLowAccuracy
+        exp_alerts: []
+
+  - name: production_feedback_low_f1_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_production_feedback_total'
+        values: '10+0x10'
+      - series: 'jobskill_production_feedback_f1_weighted'
+        values: '0.6+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillProductionFeedbackLowF1
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: model-quality
+            exp_annotations:
+              summary: "Production feedback weighted F1 is low"
+              description: "Production feedback weighted F1 is below the required threshold. Check class-level degradation, recent feedback distribution, and whether retraining is needed."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_production_feedback_low_accuracy.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_production_feedback_f1_weighted"
+
+  - name: production_feedback_low_f1_should_be_suppressed_during_maintenance
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '1+0x10'
+      - series: 'jobskill_production_feedback_total'
+        values: '10+0x10'
+      - series: 'jobskill_production_feedback_f1_weighted'
+        values: '0.6+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillProductionFeedbackLowF1
+        exp_alerts: []
+
   - name: retraining_candidate_detected_should_fire
     interval: 1m
     input_series:
       - series: 'jobskill_alert_maintenance_mode'
-        values: '0 0 0 0 0 0 0'
+        values: '0+0x10'
       - series: 'jobskill_retraining_candidate_flag'
-        values: '1 1 1 1 1 1 1'
+        values: '1+0x10'
     alert_rule_test:
       - eval_time: 6m
         alertname: JobSkillRetrainingCandidateDetected
@@ -317,16 +392,16 @@ tests:
               summary: "재학습 후보 모델이 감지되었습니다"
               description: "Production Feedback 기반 판단 결과 현재 promoted model이 재학습 후보로 분류되었습니다. 최근 feedback 정확도, Weighted F1, 하락 추세, 오분류 집중 패턴을 확인하고 재학습 또는 롤백 필요 여부를 검토하세요."
               runbook_url: "http://localhost:8000/runbooks/jobskill_retraining_candidate_detected.md"
-              dashboard_url: "http://localhost:3000"
+              dashboard_url: "http://localhost:8501"
               prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_retraining_candidate_flag"
 
   - name: retraining_candidate_should_be_suppressed_during_maintenance
     interval: 1m
     input_series:
       - series: 'jobskill_alert_maintenance_mode'
-        values: '1 1 1 1 1 1 1'
+        values: '1+0x10'
       - series: 'jobskill_retraining_candidate_flag'
-        values: '1 1 1 1 1 1 1'
+        values: '1+0x10'
     alert_rule_test:
       - eval_time: 6m
         alertname: JobSkillRetrainingCandidateDetected

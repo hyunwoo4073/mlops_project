@@ -1,175 +1,55 @@
-# JobSkill MLOps 요약
+# jobskill-mlops 요약
 
-## 1. 프로젝트 목적
+## 프로젝트 목적
 
-`jobskill-mlops`는 채용공고 데이터를 기반으로 직무 분류 모델을 만들고, 실제 운영에 가까운 MLOps 흐름을 경량 Docker Compose 환경에서 구현한 프로젝트입니다.
+`jobskill-mlops`는 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, 모델 학습 이후 운영 품질 검증까지 연결하는 end-to-end MLOps 프로젝트입니다.
 
-핵심 목표는 단순 학습 코드가 아니라 아래 전체 흐름을 연결하는 것입니다.
+핵심 목표는 아래 흐름을 로컬 Docker Compose 환경에서 재현하는 것입니다.
 
 ```text
-데이터 수집
+데이터 수집/생성
+→ PostgreSQL 적재
 → 전처리
-→ 품질 검증
+→ 데이터 계약 검증
 → 모델 학습
-→ MLflow 추적
-→ 성능 검증
+→ MLflow 기록
+→ 모델 성능 검증
 → 모델 승격
-→ API 추론
-→ 운영 지표 노출
-→ Alert / Runbook
-→ Dashboard 운영
-→ Production Feedback
-→ Retraining Candidate 판단
+→ batch/API inference
+→ production feedback 수집
+→ 운영 성능 평가
+→ 재학습 후보 판단
+→ Prometheus metric/alert
+→ runbook 기반 대응
 ```
 
-## 2. 주요 구성
+## 핵심 구성
 
 ```text
-PostgreSQL
-- jobskill DB: 프로젝트 데이터, 예측, 검증 결과, 모델 registry 저장
-- airflow DB: Airflow metadata 저장
-- mlflow DB: MLflow backend store
-
-Airflow
-- 전체 파이프라인 오케스트레이션
-- 수집, 적재, 전처리, 검증, 학습, 승격, 예측, 리포트 task 실행
-
-MLflow
-- 학습 run, metric, model artifact, dataset profile, evaluation artifact 저장
-
-FastAPI
-- /predict 단건 예측
-- /health, /ready readiness/liveness
-- /metrics Prometheus 지표 노출
-- /alertmanager/webhook alert 수신
-- /runbooks runbook HTML 서빙
-
-Streamlit Dashboard
-- 모델/데이터/API 품질 조회
-- Model Lifecycle / Evaluation / Card 조회
-- Alert History / Current Alerts / Incident Report 조회
-- Production Feedback 입력, 평가, 이력, 재학습 후보 판단
-
-Prometheus / Alertmanager / Grafana
-- 운영 metric 수집
-- alert rule 평가
-- Slack notification
-- Grafana dashboard 시각화
+Workflow        : Apache Airflow 3.x
+Database        : PostgreSQL
+ML Lifecycle    : MLflow
+Model           : scikit-learn TF-IDF + Logistic Regression
+Serving         : FastAPI
+Dashboard       : Streamlit, Grafana
+Monitoring      : Prometheus
+Alerting        : Alertmanager, Slack webhook
+Validation      : Makefile, smoke check, rule test, metrics contract, runbook check
 ```
 
-## 3. 핵심 MLOps 기능
+## 오늘 추가된 운영 개선
+
+### 1. Retraining Candidate 자동화
+
+Production Feedback 기반 재학습 후보 판단을 CLI/Smoke Check/Airflow/Metric 흐름에 연결했습니다.
 
 ```text
-Data Quality
-- Data Contract Check
-- training data quality check
-- source별 품질 리포트
-
-Model Quality
-- MLflow dataset tracking
-- classification report / confusion matrix artifact
-- model performance gate
-- class-level performance gate
-- prediction quality gate
-- prediction drift gate
-
-Model Operations
-- best model promotion
-- promoted model archive
-- rollback dry-run / rollback CLI
-- model lifecycle integrity check
-- model card 생성
-
-Serving Operations
-- FastAPI serving model reload
-- API prediction log 저장
-- API readiness metric
-- latency / confidence / error 상태 확인
-
-Alert Operations
-- Prometheus alert rule
-- Alertmanager webhook + Slack
-- runbook URL 연결
-- acknowledgement / silence / maintenance mode
-- MTTA / MTTR metric
-- incident response report
-```
-
-## 4. Production Feedback Loop
-
-운영 예측 결과가 실제로 맞았는지 확인하기 위한 feedback 기반 품질 관리 기능입니다.
-
-```text
-model_predictions
-→ prediction_feedbacks
-→ check_production_feedback.py
-→ PRODUCTION_FEEDBACK check 저장
-→ jobskill_production_feedback_* metric 노출
-→ Production Feedback alert
-→ runbook 대응
-```
-
-주요 metric:
-
-```text
-jobskill_production_feedback_total
-jobskill_production_feedback_accuracy
-jobskill_production_feedback_f1_weighted
-jobskill_production_feedback_category_total
-```
-
-주요 alert:
-
-```text
-JobSkillProductionFeedbackLowAccuracy
-JobSkillProductionFeedbackLowF1
-```
-
-## 5. Production Feedback Dashboard
-
-Streamlit Dashboard의 `Production Feedback` 탭에서 아래 기능을 제공합니다.
-
-```text
-Feedback Input
-- 최근 prediction 선택
-- actual_category 입력
-- feedback_source / note / created_by 저장
-- prediction_feedbacks upsert
-
-Evaluation Runner
-- Dashboard에서 production feedback 평가 실행
-- production_feedback_count / accuracy / weighted_f1 저장
-
-Evaluation History
-- accuracy / weighted F1 trend 확인
-- feedback count trend 확인
-- PASS / FAIL / SKIPPED 이력 확인
-
-Retraining Candidate
-- feedback 수 충분성 확인
-- 최신 accuracy / weighted F1 기준 확인
-- 최근 성능 하락 추세 확인
-- 오분류 집중 패턴 확인
-- 재학습 후보 여부 판단
-```
-
-## 6. Retraining Candidate Loop
-
-Production Feedback 평가 결과를 기반으로 현재 promoted model이 재학습 후보인지 판단합니다.
-
-```text
-PRODUCTION_FEEDBACK 평가 이력
-→ Retraining Candidate 판단
-→ RETRAINING_CANDIDATE check 저장
-→ retraining candidate metric 노출
+src/quality/check_retraining_candidate.py
+→ Makefile retraining-candidate-check
+→ smoke check
+→ pipeline_check_results
+→ FastAPI /metrics
 → Prometheus alert
-→ runbook 대응
-```
-
-저장되는 check type:
-
-```text
-RETRAINING_CANDIDATE
 ```
 
 주요 metric:
@@ -183,46 +63,161 @@ jobskill_retraining_candidate_accuracy_delta
 jobskill_retraining_candidate_f1_delta
 ```
 
-주요 alert:
+### 2. Feedback Ops Airflow DAG
+
+메인 학습 DAG와 별도로 운영 품질 점검 DAG를 추가했습니다.
 
 ```text
-JobSkillRetrainingCandidateDetected
+dags/jobskill_feedback_ops_dag.py
 ```
 
-## 7. 운영 검증 체계
+DAG 흐름:
 
-서비스 기동 전후로 아래 검증을 수행합니다.
+```text
+show_feedback_ops_config
+    ↓
+check_production_feedback
+    ↓
+check_retraining_candidate
+```
+
+운영 의미:
+
+```text
+jobskill_mlops_pipeline
+- 모델 생성/검증/승격 중심
+
+jobskill_feedback_ops
+- 운영 feedback 평가/재학습 후보 판단 중심
+```
+
+### 3. Schedule / threshold 환경변수화
+
+Feedback Ops DAG는 기본 daily schedule이지만, 환경변수로 수동 모드 전환이 가능합니다.
+
+```env
+FEEDBACK_OPS_DAG_SCHEDULE="0 9 * * *"
+```
+
+수동 모드:
+
+```env
+FEEDBACK_OPS_DAG_SCHEDULE=manual
+```
+
+주요 threshold:
+
+```text
+MIN_PRODUCTION_FEEDBACK_ROWS=10
+MIN_PRODUCTION_ACCURACY=0.70
+MIN_PRODUCTION_F1_WEIGHTED=0.70
+PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD=0.05
+PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS=3
+```
+
+### 4. Prometheus alert rule/test 정리
+
+Production Feedback / Retraining Candidate alert에 maintenance mode 조건을 맞췄습니다.
+
+```text
+jobskill_alert_maintenance_mode == 0
+```
+
+Streamlit에서 확인해야 하는 model-quality 계열 alert의 `dashboard_url`은 아래로 정리했습니다.
+
+```text
+http://localhost:8501
+```
+
+추가/정리한 test:
+
+```text
+production_feedback_low_accuracy_should_fire
+production_feedback_low_accuracy_should_be_suppressed_during_maintenance
+production_feedback_low_f1_should_fire
+production_feedback_low_f1_should_be_suppressed_during_maintenance
+retraining_candidate_detected_should_fire
+retraining_candidate_should_be_suppressed_during_maintenance
+```
+
+### 5. Alert response metric 트러블슈팅
+
+로컬 smoke test에서 생성된 `SmokeTestAlert`가 오래된 firing 상태로 남으면 아래 alert를 유발할 수 있음을 확인했습니다.
+
+```text
+JobSkillUnacknowledgedCurrentAlert
+JobSkillHighAverageMTTA
+JobSkillHighAverageMTTR
+```
+
+확인 쿼리:
 
 ```bash
-make metrics-contract-check
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    id,
+    alert_name,
+    service,
+    severity,
+    status,
+    starts_at,
+    last_received_at,
+    fingerprint,
+    ROUND(EXTRACT(EPOCH FROM (NOW() - starts_at)) / 60, 2) AS firing_minutes
+FROM alert_current_states
+WHERE status = 'firing'
+ORDER BY starts_at ASC;
+"
+```
+
+로컬 테스트 데이터 정리:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+DELETE FROM alert_current_states
+WHERE fingerprint = 'smoke-test-fingerprint'
+   OR service = 'smoke-test'
+   OR alert_name = 'SmokeTestAlert';
+
+DELETE FROM alert_events
+WHERE fingerprint = 'smoke-test-fingerprint'
+   OR service = 'smoke-test'
+   OR alert_name = 'SmokeTestAlert';
+
+DELETE FROM alert_current_states
+WHERE alert_name IN (
+    'JobSkillUnacknowledgedCurrentAlert',
+    'JobSkillHighAverageMTTA',
+    'JobSkillHighAverageMTTR'
+);
+"
+```
+
+## 검증 명령어
+
+```bash
+make ops-static-check
+make production-feedback-sample
+make production-feedback-check
+make retraining-candidate-check
+make feedback-ops-dag-tasks
 make prometheus-check
 make prometheus-rule-test
-make runbook-check
 make alert-rule-metric-check
-make ops-static-check
+make runbook-check
 make smoke
 ```
 
-검증 대상:
+## 포트폴리오 관점 핵심 메시지
+
+이 프로젝트는 단순 ML 학습 코드가 아니라, 운영 중 모델 품질을 feedback 기반으로 다시 평가하고, 재학습 후보 판단까지 자동화하는 MLOps 운영 흐름을 구현합니다.
 
 ```text
-Python syntax
-Docker Compose rendered config
-Prometheus config / alert rule
-Prometheus rule unit test
-Alertmanager config
-Runbook coverage
-Metrics contract
-Alert rule metric dependency
-API / Dashboard / Prometheus / Alertmanager / Grafana smoke path
+배포 이후 예측
+→ 실제 feedback 수집
+→ 운영 성능 재평가
+→ 재학습 후보 판단
+→ metric/alert/runbook 연결
 ```
 
-## 8. 포트폴리오에서 강조할 점
-
-```text
-1. 단순 모델 학습이 아니라 운영 가능한 MLOps loop를 구현함
-2. MLflow, Airflow, FastAPI, Streamlit, Prometheus, Alertmanager, Grafana를 end-to-end로 연결함
-3. 모델 승격, archive, rollback, lifecycle integrity check를 구현함
-4. alert, runbook, acknowledgement, silence, MTTA/MTTR, incident report까지 운영 대응 흐름을 구현함
-5. production feedback 기반 운영 성능 평가와 retraining candidate alert까지 연결함
-```
+이 흐름이 오늘 작업으로 CLI, Dashboard, Airflow, Prometheus, Smoke Check까지 연결되었습니다.

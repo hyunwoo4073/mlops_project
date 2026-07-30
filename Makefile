@@ -35,7 +35,7 @@ ALL_RUNTIME_SERVICES := $(AIRFLOW_SERVICES) $(APP_SERVICES)
 	airflow-init create-tables psql \
 	dag-list dag-errors dag-tasks dag-trigger dag-runs \
 	lint test test-container ci \
-	smoke data-contract-check model-class-performance-check drift-check production-feedback-sample production-feedback-check \
+	smoke data-contract-check model-class-performance-check drift-check production-feedback-sample production-feedback-check retraining-candidate-check feedback-ops-dag-tasks feedback-ops-dag-trigger \
 	alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check repo-artifact-check compose-config-check \
 	report incident-report incident-drill model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check \
 	notify notification-check notification-test-alert notification-resolve-alert \
@@ -83,6 +83,10 @@ help:
 	@echo "  make drift-check                            Run prediction distribution drift check"
 	@echo "  make production-feedback-sample             Create sample feedback from recent predictions"
 	@echo "  make production-feedback-check              Evaluate production feedback performance"
+	@echo "  retraining-candidate-check                  Evaluate and persist retraining candidate decision"
+	@echo "  feedback-ops-dag-tasks                      List feedback ops DAG tasks"
+	@echo "  feedback-ops-dag-info                       Show feedback ops DAG graph/info"
+	@echo "  feedback-ops-dag-trigger                    Trigger feedback ops DAG"
 	@echo ""
 	@echo "Ops Validation"
 	@echo "  make alert-workflow-check                   Run alert workflow smoke check"
@@ -213,6 +217,18 @@ production-feedback-sample:
 
 production-feedback-check:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_production_feedback.py"
+
+retraining-candidate-check:
+	docker compose exec -T airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_retraining_candidate.py"
+
+feedback-ops-dag-tasks:
+	docker compose exec -T airflow-scheduler airflow tasks list jobskill_feedback_ops
+
+feedback-ops-dag-info:
+	docker compose exec -T airflow-scheduler airflow dags show jobskill_feedback_ops
+
+feedback-ops-dag-trigger:
+	docker compose exec -T airflow-scheduler airflow dags trigger jobskill_feedback_ops
 
 alert-workflow-check:
 	bash scripts/check_alert_workflow.sh

@@ -1,37 +1,41 @@
-# JobSkill MLOps Quick Start
+# jobskill-mlops Quick Start
 
-이 문서는 로컬에서 `jobskill-mlops`를 빠르게 실행하고, DAG/API/Monitoring/Production Feedback/Retraining Candidate 흐름까지 검증하기 위한 가이드입니다.
+이 문서는 로컬 Docker Compose 환경에서 `jobskill-mlops`를 실행하고, 오늘 추가한 Feedback Ops / Retraining Candidate / Alert Rule 검증까지 확인하는 순서입니다.
 
-## 1. 환경 준비
+## 1. 환경 파일 준비
 
 ```bash
 cp .env.example .env
-mkdir -p .secrets
-cp .secrets.example/slack_webhook_url.example .secrets/slack_webhook_url
 ```
 
-Slack 알림을 실제로 받을 경우 `.secrets/slack_webhook_url`에 실제 Slack Incoming Webhook URL을 입력합니다.
+Feedback Ops DAG 관련 값이 `.env`에 있는지 확인합니다.
 
-테스트만 할 경우 placeholder 상태로 두어도 됩니다.
+```env
+FEEDBACK_OPS_DAG_SCHEDULE="0 9 * * *"
 
-## 2. 서비스 기동
+PRODUCTION_FEEDBACK_STRICT=false
+RETRAINING_CANDIDATE_STRICT=false
 
-PostgreSQL 먼저 기동합니다.
+MIN_PRODUCTION_FEEDBACK_ROWS=10
+MIN_PRODUCTION_ACCURACY=0.70
+MIN_PRODUCTION_F1_WEIGHTED=0.70
+PRODUCTION_FEEDBACK_WINDOW_DAYS=30
 
-```bash
-docker compose up -d postgres
+PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD=0.05
+PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS=3
 ```
 
-DB와 테이블을 생성합니다.
+수동 실행만 원하면 아래처럼 변경합니다.
 
-```bash
-make create-tables
+```env
+FEEDBACK_OPS_DAG_SCHEDULE=manual
 ```
 
-주요 서비스를 기동합니다.
+## 2. 서비스 빌드/기동
 
 ```bash
-docker compose up -d   airflow-apiserver   airflow-scheduler   airflow-dag-processor   airflow-triggerer   mlflow   api   dashboard   prometheus   alertmanager   grafana
+make build
+make up
 ```
 
 상태 확인:
@@ -40,89 +44,113 @@ docker compose up -d   airflow-apiserver   airflow-scheduler   airflow-dag-proce
 docker compose ps
 ```
 
-## 3. 접속 URL
+주요 URL:
 
 ```text
-Airflow      : http://localhost:8080
-MLflow       : http://localhost:5000
-FastAPI      : http://localhost:8000
-Streamlit    : http://localhost:8501
-Prometheus   : http://localhost:9090
-Alertmanager : http://localhost:9093
-Grafana      : http://localhost:3000
+FastAPI             http://localhost:8000
+FastAPI Docs        http://localhost:8000/docs
+Streamlit Dashboard http://localhost:8501
+MLflow              http://localhost:5000
+Prometheus          http://localhost:9090
+Alertmanager        http://localhost:9093
+Grafana             http://localhost:3000
 ```
 
-## 4. 기본 파이프라인 실행
+## 3. DB 테이블 생성
 
-Airflow DAG 실행:
+```bash
+make create-tables
+```
+
+DB 접속 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "SELECT 1;"
+```
+
+## 4. Airflow DAG 확인
+
+메인 DAG:
+
+```bash
+make dag-list
+make dag-tasks
+```
+
+Feedback Ops DAG:
+
+```bash
+make feedback-ops-dag-tasks
+```
+
+직접 확인:
+
+```bash
+docker compose exec -T airflow-scheduler airflow dags list | grep jobskill_feedback_ops
+docker compose exec -T airflow-scheduler airflow tasks list jobskill_feedback_ops
+```
+
+기대 task:
+
+```text
+show_feedback_ops_config
+check_production_feedback
+check_retraining_candidate
+```
+
+## 5. 메인 파이프라인 실행
 
 ```bash
 make dag-trigger
 ```
 
-DAG task 확인:
+실행 이력 확인:
 
 ```bash
-docker compose exec -T airflow-scheduler airflow tasks list jobskill_mlops_pipeline
+docker compose exec -T airflow-scheduler airflow dags list-runs jobskill_mlops_pipeline
 ```
 
-## 5. API 확인
-
-Health:
+## 6. FastAPI 확인
 
 ```bash
 curl -fsS http://localhost:8000/health | jq
-```
-
-Readiness:
-
-```bash
 curl -fsS http://localhost:8000/ready | jq
-```
-
-Model info:
-
-```bash
 curl -fsS http://localhost:8000/model | jq
 ```
 
-샘플 API 요청:
+샘플 요청:
 
 ```bash
 make api-sample
 ```
 
-API prediction row 확인:
+API 컨테이너가 DB를 resolve하는지 확인:
 
 ```bash
-docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
-SELECT
-    id,
-    prediction_source,
-    predicted_category,
-    confidence,
-    predicted_at
-FROM model_predictions
-ORDER BY id DESC
-LIMIT 10;
-"
+docker compose exec -T api getent hosts postgres
 ```
 
-## 6. Production Feedback 실행
+로컬 컨테이너 재기동 후 `/predict`에서 DB 연결 오류가 나면 API만 재기동합니다.
 
-샘플 feedback 생성:
+```bash
+docker compose up -d --force-recreate api
+```
+
+## 7. Production Feedback 생성/평가
+
+샘플 production feedback 생성:
 
 ```bash
 make production-feedback-sample
 ```
 
-오답 feedback을 더 많이 만들고 싶으면:
+오답 feedback을 더 많이 만들어 alert 조건을 테스트하려면:
 
 ```bash
 LIMIT=30 WRONG_EVERY=2 make production-feedback-sample
 ```
 
-Production feedback 평가:
+Production Feedback 평가:
 
 ```bash
 make production-feedback-check
@@ -133,6 +161,7 @@ make production-feedback-check
 ```bash
 docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
 SELECT
+    check_type,
     check_name,
     status,
     metric_value,
@@ -142,66 +171,17 @@ SELECT
 FROM pipeline_check_results
 WHERE check_type = 'PRODUCTION_FEEDBACK'
 ORDER BY checked_at DESC
-LIMIT 10;
+LIMIT 20;
 "
 ```
 
-metric 확인:
+## 8. Retraining Candidate 평가
 
 ```bash
-curl -fsS http://localhost:8000/metrics | grep -E "jobskill_production_feedback"
+make retraining-candidate-check
 ```
 
-## 7. Dashboard에서 Production Feedback 확인
-
-Streamlit 접속:
-
-```text
-http://localhost:8501
-```
-
-이동:
-
-```text
-Production Feedback
-```
-
-확인할 하위 탭:
-
-```text
-Feedback Input
-Evaluation Runner
-Evaluation History
-Retraining Candidate
-Recent Feedback
-Wrong Predictions
-Confusion Table
-Feedback Source
-Evaluation Checks
-```
-
-Dashboard에서 직접 할 수 있는 작업:
-
-```text
-1. 최근 prediction 선택
-2. actual_category feedback 저장
-3. production feedback 평가 실행
-4. accuracy / weighted F1 추세 확인
-5. retraining candidate 여부 판단
-6. 판단 결과 저장
-```
-
-## 8. Retraining Candidate 확인
-
-Dashboard에서 판단 결과 저장:
-
-```text
-Production Feedback
-→ Retraining Candidate
-→ Save retraining candidate decision
-```
-
-DB 저장 결과 확인:
+결과 확인:
 
 ```bash
 docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
@@ -223,135 +203,153 @@ LIMIT 30;
 "
 ```
 
-metric 확인:
+Metric 확인:
 
 ```bash
 curl -fsS http://localhost:8000/metrics | grep -E "jobskill_retraining_candidate"
 ```
 
-예상 metric:
+## 9. Feedback Ops DAG 실행
 
-```text
-jobskill_retraining_candidate_flag
-jobskill_retraining_candidate_feedback_count
-jobskill_retraining_candidate_accuracy
-jobskill_retraining_candidate_f1_weighted
-jobskill_retraining_candidate_accuracy_delta
-jobskill_retraining_candidate_f1_delta
+수동 trigger:
+
+```bash
+make feedback-ops-dag-trigger
 ```
 
-## 9. Prometheus / Alert 검증
+또는 직접 실행:
 
-Prometheus config 검증:
+```bash
+docker compose exec -T airflow-scheduler airflow dags trigger jobskill_feedback_ops
+```
+
+실행 결과 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    dag_id,
+    task_id,
+    run_id,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type IN ('PRODUCTION_FEEDBACK', 'RETRAINING_CANDIDATE')
+ORDER BY checked_at DESC
+LIMIT 30;
+"
+```
+
+기대값:
+
+```text
+dag_id = jobskill_feedback_ops
+task_id = check_production_feedback
+task_id = check_retraining_candidate
+```
+
+## 10. Prometheus / Alert Rule 검증
 
 ```bash
 make prometheus-check
-```
-
-Prometheus alert rule unit test:
-
-```bash
 make prometheus-rule-test
-```
-
-Runbook coverage:
-
-```bash
+make alert-rule-metric-check
 make runbook-check
 ```
 
-Alert rule metric dependency:
-
-```bash
-make alert-rule-metric-check
-```
-
-Metrics contract:
-
-```bash
-make metrics-contract-check
-```
-
-Static ops validation:
+전체 static ops validation:
 
 ```bash
 make ops-static-check
 ```
 
-## 10. 전체 Smoke Check
+전체 smoke check:
 
 ```bash
 make smoke
 ```
 
-Smoke check는 주요 서비스와 운영 경로를 검증합니다.
+## 11. Alert current state 확인
 
-```text
-Docker Compose config
-PostgreSQL connection
-Project tables
-Airflow DAG import / task list
-MLflow UI
-FastAPI health / ready / model / metrics
-API sample prediction
-Production feedback sample / evaluation / metrics
-Prometheus readiness
-Alertmanager readiness
-Alert webhook 저장
-Grafana health
-Streamlit dashboard
-```
-
-## 11. 자주 확인하는 명령어
-
-컨테이너 상태:
+현재 firing alert 확인:
 
 ```bash
-docker compose ps
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    id,
+    alert_name,
+    service,
+    severity,
+    status,
+    starts_at,
+    last_received_at,
+    fingerprint,
+    ROUND(EXTRACT(EPOCH FROM (NOW() - starts_at)) / 60, 2) AS firing_minutes
+FROM alert_current_states
+WHERE status = 'firing'
+ORDER BY starts_at ASC;
+"
 ```
 
-API 로그:
+`SmokeTestAlert`가 오래된 firing 상태로 남아 있으면 로컬 테스트 데이터 정리:
 
 ```bash
-docker compose logs --tail=100 api
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+DELETE FROM alert_current_states
+WHERE fingerprint = 'smoke-test-fingerprint'
+   OR service = 'smoke-test'
+   OR alert_name = 'SmokeTestAlert';
+
+DELETE FROM alert_events
+WHERE fingerprint = 'smoke-test-fingerprint'
+   OR service = 'smoke-test'
+   OR alert_name = 'SmokeTestAlert';
+
+DELETE FROM alert_current_states
+WHERE alert_name IN (
+    'JobSkillUnacknowledgedCurrentAlert',
+    'JobSkillHighAverageMTTA',
+    'JobSkillHighAverageMTTR'
+);
+"
 ```
 
-Dashboard 로그:
+정리 후 확인:
 
 ```bash
-docker compose logs --tail=100 dashboard
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_alert_unacknowledged_current_total|jobskill_alert_avg_mtta_minutes|jobskill_alert_avg_mttr_minutes"
 ```
 
-Prometheus metric 확인:
+## 12. 최종 검증 세트
+
+오늘 작업 기준 최종 검증은 아래 순서로 실행합니다.
 
 ```bash
-curl -fsS http://localhost:8000/metrics | head
-```
-
-Alert 목록:
-
-```bash
-curl -fsS "http://localhost:9090/api/v1/alerts" | jq
-```
-
-Alertmanager alert 목록:
-
-```bash
-curl -fsS http://localhost:9093/api/v2/alerts | jq
-```
-
-## 12. 마무리 검증 세트
-
-작업 후 아래 명령어를 순서대로 실행합니다.
-
-```bash
-python -m py_compile src/dashboard/app.py
+python -m py_compile src/quality/check_retraining_candidate.py
+python -m py_compile dags/jobskill_feedback_ops_dag.py
 python -m py_compile src/monitoring/prometheus_metrics.py
-make metrics-contract-check
+python -m py_compile src/dashboard/app.py
+
+make ops-static-check
+make production-feedback-sample
+make production-feedback-check
+make retraining-candidate-check
+make feedback-ops-dag-tasks
 make prometheus-check
 make prometheus-rule-test
-make runbook-check
 make alert-rule-metric-check
-make ops-static-check
+make runbook-check
 make smoke
 ```
+
+## 13. 종료
+
+```bash
+make down
+```
+
+volume까지 제거해야 하는 초기화 상황이 아니면 `docker compose down -v`는 사용하지 않습니다.
