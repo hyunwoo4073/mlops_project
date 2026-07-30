@@ -30,6 +30,23 @@ docs/QUICKSTART.md
 ## 주요 업데이트 내역
 
 ```text
+2026-07-30
+- `src/quality/check_retraining_candidate.py` 기반 재학습 후보 판단을 CLI/Makefile/Smoke Check 검증 흐름에 연결
+- `Makefile`에 `retraining-candidate-check` target을 추가해 Airflow 컨테이너에서 재학습 후보 평가를 직접 실행하도록 개선
+- `scripts/check_static_ops_validation.sh`에 retraining candidate check와 feedback ops DAG Python compile 검증 추가
+- `scripts/smoke_check.sh`에 retraining candidate 평가 실행, `RETRAINING_CANDIDATE` DB 저장 결과 확인, `/metrics` retraining candidate metric 노출 확인 추가
+- Production Feedback 평가와 Retraining Candidate 판단을 분리 실행하기 위해 전용 Airflow DAG `dags/jobskill_feedback_ops_dag.py` 추가
+- `jobskill_feedback_ops` DAG에 `show_feedback_ops_config → check_production_feedback → check_retraining_candidate` 실행 흐름 구성
+- `FEEDBACK_OPS_DAG_SCHEDULE` 환경변수로 feedback ops DAG를 daily schedule 또는 manual 모드로 제어하도록 개선
+- Feedback Ops DAG에 `max_active_runs=1`, `dagrun_timeout`, `retries`, `retry_delay`를 적용해 운영형 DAG 실행 안정성 강화
+- `docker-compose.yml`의 `x-airflow-common.environment`에 feedback ops schedule과 production feedback/retraining threshold 환경변수를 전달하도록 정리
+- `.env.example`에 `FEEDBACK_OPS_DAG_SCHEDULE`, `PRODUCTION_FEEDBACK_STRICT`, `RETRAINING_CANDIDATE_STRICT`, production feedback threshold, trend threshold 값을 문서화
+- `Makefile`에 `feedback-ops-dag-tasks`, `feedback-ops-dag-info`, `feedback-ops-dag-trigger` target을 추가해 전용 DAG 확인/수동 실행 명령 표준화
+- `JobSkillProductionFeedbackLowAccuracy`, `JobSkillProductionFeedbackLowF1`, `JobSkillRetrainingCandidateDetected` alert rule을 maintenance mode 조건과 Streamlit dashboard URL 기준으로 정리
+- Prometheus rule test에 Production Feedback alert firing/suppression 케이스와 Retraining Candidate dashboard URL annotation을 반영
+- `SmokeTestAlert` 테스트 current state가 `JobSkillUnacknowledgedCurrentAlert`, `JobSkillHighAverageMTTA`, `JobSkillHighAverageMTTR`을 유발할 수 있음을 확인하고 로컬 테스트 데이터 정리 절차를 문서화
+- FastAPI `/predict` smoke check 중 DB stale connection/Docker DNS 일시 문제는 API 컨테이너 재기동으로 복구되는 케이스임을 확인
+
 2026-07-29
 - Streamlit Dashboard에 `Production Feedback` 탭 추가
 - Production Feedback 탭에서 feedback count, production accuracy, weighted F1, incorrect prediction count 요약 지표 제공
@@ -742,6 +759,441 @@ make alert-rule-metric-check
 make ops-static-check
 ```
 
+## Feedback Ops Airflow DAG
+
+Feedback Ops Airflow DAG는 학습 파이프라인과 분리된 운영 품질 점검 DAG입니다.
+
+기존 `jobskill_mlops_pipeline`은 데이터 생성, 적재, 전처리, 학습, 검증, 승격, batch inference까지 이어지는 모델 생성 중심 DAG입니다. 반면 `jobskill_feedback_ops`는 이미 운영 중인 promoted model에 대해 production feedback 품질과 재학습 후보 여부를 주기적으로 확인하는 운영 점검 DAG입니다.
+
+```text
+jobskill_mlops_pipeline
+→ 모델 생성/검증/승격 중심
+
+jobskill_feedback_ops
+→ 운영 feedback 평가/재학습 후보 판단 중심
+```
+
+### DAG 흐름
+
+```text
+show_feedback_ops_config
+    ↓
+check_production_feedback
+    ↓
+check_retraining_candidate
+```
+
+구성 파일:
+
+```text
+dags/jobskill_feedback_ops_dag.py
+```
+
+각 task 역할:
+
+```text
+show_feedback_ops_config
+- DAG 실행 시점의 schedule, strict mode, threshold 값을 로그로 출력
+
+check_production_feedback
+- prediction_feedbacks와 model_predictions를 기준으로 production accuracy / weighted F1 평가
+- pipeline_check_results에 PRODUCTION_FEEDBACK 결과 저장
+
+check_retraining_candidate
+- production feedback 평가 이력과 threshold를 기준으로 재학습 후보 여부 판단
+- pipeline_check_results에 RETRAINING_CANDIDATE 결과 저장
+```
+
+### Schedule 제어
+
+기본 schedule은 매일 09:00 실행입니다.
+
+```env
+FEEDBACK_OPS_DAG_SCHEDULE="0 9 * * *"
+```
+
+수동 실행 모드로 두고 싶으면 아래 값 중 하나를 사용합니다.
+
+```env
+FEEDBACK_OPS_DAG_SCHEDULE=manual
+```
+
+```env
+FEEDBACK_OPS_DAG_SCHEDULE=none
+```
+
+```env
+FEEDBACK_OPS_DAG_SCHEDULE=off
+```
+
+Airflow DAG parser와 scheduler가 환경변수를 읽어야 하므로, Docker Compose의 Airflow 공통 environment에 값을 전달합니다.
+
+```yaml
+FEEDBACK_OPS_DAG_SCHEDULE: "${FEEDBACK_OPS_DAG_SCHEDULE:-0 9 * * *}"
+PRODUCTION_FEEDBACK_STRICT: "${PRODUCTION_FEEDBACK_STRICT:-false}"
+RETRAINING_CANDIDATE_STRICT: "${RETRAINING_CANDIDATE_STRICT:-false}"
+MIN_PRODUCTION_FEEDBACK_ROWS: "${MIN_PRODUCTION_FEEDBACK_ROWS:-10}"
+MIN_PRODUCTION_ACCURACY: "${MIN_PRODUCTION_ACCURACY:-0.70}"
+MIN_PRODUCTION_F1_WEIGHTED: "${MIN_PRODUCTION_F1_WEIGHTED:-0.70}"
+PRODUCTION_FEEDBACK_WINDOW_DAYS: "${PRODUCTION_FEEDBACK_WINDOW_DAYS:-30}"
+PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD: "${PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD:-0.05}"
+PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS: "${PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS:-3}"
+```
+
+### Feedback Ops DAG 명령어
+
+DAG task 목록 확인:
+
+```bash
+make feedback-ops-dag-tasks
+```
+
+DAG graph/info 확인:
+
+```bash
+make feedback-ops-dag-info
+```
+
+DAG 수동 실행:
+
+```bash
+make feedback-ops-dag-trigger
+```
+
+Airflow CLI 직접 실행:
+
+```bash
+docker compose exec -T airflow-scheduler airflow tasks list jobskill_feedback_ops
+docker compose exec -T airflow-scheduler airflow dags trigger jobskill_feedback_ops
+```
+
+실행 결과 DB 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    dag_id,
+    task_id,
+    run_id,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type IN ('PRODUCTION_FEEDBACK', 'RETRAINING_CANDIDATE')
+ORDER BY checked_at DESC
+LIMIT 30;
+"
+```
+
+기대되는 DAG context:
+
+```text
+dag_id = jobskill_feedback_ops
+task_id = check_production_feedback
+task_id = check_retraining_candidate
+```
+
+### Feedback Ops 검증
+
+```bash
+python -m py_compile dags/jobskill_feedback_ops_dag.py
+make ops-static-check
+make production-feedback-sample
+make production-feedback-check
+make retraining-candidate-check
+make feedback-ops-dag-tasks
+make smoke
+```
+
+## Retraining Candidate Automation
+
+Retraining Candidate Automation은 production feedback 기반 재학습 후보 판단을 Dashboard 수동 판단에만 두지 않고, CLI, Smoke Check, Airflow DAG, Prometheus metric까지 연결하는 운영 자동화 단계입니다.
+
+### 실행 명령어
+
+```bash
+make retraining-candidate-check
+```
+
+내부 실행:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_retraining_candidate.py"
+```
+
+### 저장 결과
+
+`pipeline_check_results`에 아래 check가 저장됩니다.
+
+```text
+check_type = RETRAINING_CANDIDATE
+
+check_name:
+- retraining_candidate_flag
+- retraining_feedback_count
+- retraining_accuracy
+- retraining_f1_weighted
+- retraining_accuracy_delta
+- retraining_f1_delta
+```
+
+상태 의미:
+
+```text
+PASS
+- 현재 기준에서는 재학습 후보가 아님
+
+FAIL
+- 현재 기준에서 재학습 후보임
+
+SKIPPED
+- feedback 수가 부족해 판단 보류
+```
+
+DB 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    message,
+    dag_id,
+    task_id,
+    run_id,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type = 'RETRAINING_CANDIDATE'
+ORDER BY checked_at DESC
+LIMIT 30;
+"
+```
+
+### Metrics
+
+FastAPI `/metrics`에서 아래 metric을 확인합니다.
+
+```text
+jobskill_retraining_candidate_flag
+jobskill_retraining_candidate_feedback_count
+jobskill_retraining_candidate_accuracy
+jobskill_retraining_candidate_f1_weighted
+jobskill_retraining_candidate_accuracy_delta
+jobskill_retraining_candidate_f1_delta
+```
+
+확인:
+
+```bash
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_retraining_candidate"
+```
+
+## Production Feedback / Retraining Alert Rule 정리
+
+Production Feedback과 Retraining Candidate alert는 모두 maintenance mode 조건을 적용합니다.
+
+```text
+jobskill_alert_maintenance_mode == 0
+```
+
+이를 통해 Streamlit Dashboard에서 점검 모드를 켰을 때 운영 품질 계열 warning alert가 억제됩니다.
+
+### Production Feedback alert
+
+```text
+JobSkillProductionFeedbackLowAccuracy
+- jobskill_production_feedback_total >= 10
+- jobskill_production_feedback_accuracy < 0.7
+- jobskill_alert_maintenance_mode == 0
+
+JobSkillProductionFeedbackLowF1
+- jobskill_production_feedback_total >= 10
+- jobskill_production_feedback_f1_weighted < 0.7
+- jobskill_alert_maintenance_mode == 0
+```
+
+### Retraining Candidate alert
+
+```text
+JobSkillRetrainingCandidateDetected
+- jobskill_retraining_candidate_flag == 1
+- jobskill_alert_maintenance_mode == 0
+```
+
+Model quality 계열 alert의 `dashboard_url`은 Streamlit Dashboard를 가리킵니다.
+
+```text
+http://localhost:8501
+```
+
+Prometheus/Grafana 자체 상태를 보는 alert는 Grafana를 가리킬 수 있습니다.
+
+```text
+http://localhost:3000
+```
+
+### Rule test
+
+Production Feedback alert rule test에는 아래 케이스를 포함합니다.
+
+```text
+production_feedback_low_accuracy_should_fire
+production_feedback_low_accuracy_should_be_suppressed_during_maintenance
+production_feedback_low_f1_should_fire
+production_feedback_low_f1_should_be_suppressed_during_maintenance
+```
+
+Retraining Candidate alert rule test에는 아래 케이스를 포함합니다.
+
+```text
+retraining_candidate_detected_should_fire
+retraining_candidate_should_be_suppressed_during_maintenance
+```
+
+검증:
+
+```bash
+make prometheus-check
+make prometheus-rule-test
+make alert-rule-metric-check
+make runbook-check
+```
+
+## Alert Response Metric Troubleshooting
+
+Alert response metric은 `alert_events`, `alert_current_states`, `alert_acknowledgements`를 기반으로 현재 alert 상태와 MTTA/MTTR을 계산합니다.
+
+```text
+JobSkillUnacknowledgedCurrentAlert
+- 현재 firing 상태 alert 중 acknowledgement가 없거나, unack으로 간주되는 alert가 존재할 때 발생
+
+JobSkillHighAverageMTTA
+- alert 발생 후 acknowledgement까지 걸린 평균 시간이 기준보다 높을 때 발생
+
+JobSkillHighAverageMTTR
+- alert 발생 후 resolved까지 걸린 평균 시간이 기준보다 높을 때 발생
+```
+
+### SmokeTestAlert current state 이슈
+
+로컬 smoke test에서 생성된 `SmokeTestAlert`가 `alert_current_states`에 오래된 firing 상태로 남으면 alert response 계열 alert가 연쇄적으로 발생할 수 있습니다.
+
+확인 예시:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    id,
+    alert_name,
+    service,
+    severity,
+    status,
+    starts_at,
+    ends_at,
+    last_received_at,
+    updated_at,
+    fingerprint,
+    ROUND(EXTRACT(EPOCH FROM (NOW() - starts_at)) / 60, 2) AS firing_minutes
+FROM alert_current_states
+WHERE status = 'firing'
+ORDER BY starts_at ASC;
+"
+```
+
+예상 문제 패턴:
+
+```text
+SmokeTestAlert | smoke-test | firing | starts_at이 오래된 과거 시각
+JobSkillUnacknowledgedCurrentAlert | jobskill-alerting | firing
+JobSkillHighAverageMTTA | jobskill-alerting | firing
+JobSkillHighAverageMTTR | jobskill-alerting | firing
+```
+
+로컬 테스트 데이터 정리:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+DELETE FROM alert_current_states
+WHERE fingerprint = 'smoke-test-fingerprint'
+   OR service = 'smoke-test'
+   OR alert_name = 'SmokeTestAlert';
+
+DELETE FROM alert_events
+WHERE fingerprint = 'smoke-test-fingerprint'
+   OR service = 'smoke-test'
+   OR alert_name = 'SmokeTestAlert';
+
+DELETE FROM alert_current_states
+WHERE alert_name IN (
+    'JobSkillUnacknowledgedCurrentAlert',
+    'JobSkillHighAverageMTTA',
+    'JobSkillHighAverageMTTR'
+);
+"
+```
+
+정리 후 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    id,
+    alert_name,
+    service,
+    severity,
+    status,
+    starts_at,
+    fingerprint
+FROM alert_current_states
+WHERE status = 'firing'
+ORDER BY starts_at ASC;
+"
+
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_alert_unacknowledged_current_total|jobskill_alert_avg_mtta_minutes|jobskill_alert_avg_mttr_minutes"
+```
+
+주의할 점:
+
+```text
+실제 운영 alert는 DB에서 임의 삭제하지 않는다.
+SmokeTestAlert, incident-drill 등 로컬 테스트 데이터만 정리한다.
+원인 metric이 계속 firing 조건을 만족하면 current state를 삭제해도 다시 생성된다.
+```
+
+## FastAPI DB Connection Recovery Note
+
+로컬 Docker Compose에서 Postgres, Airflow, API 컨테이너를 반복 재기동하면 FastAPI가 오래된 DB connection pool을 들고 있다가 `/predict` INSERT 시점에 실패할 수 있습니다.
+
+대표 증상:
+
+```text
+psycopg2.OperationalError: server closed the connection unexpectedly
+could not translate host name "postgres" to address
+```
+
+즉시 복구:
+
+```bash
+docker compose up -d --force-recreate api
+```
+
+확인:
+
+```bash
+docker compose exec -T api getent hosts postgres
+curl -fsS http://localhost:8000/ready | jq
+python scripts/send_sample_api_requests.py
+```
+
+이 이슈는 로컬 컨테이너 재기동 과정에서 발생할 수 있는 stale connection 또는 Docker DNS 일시 문제로 볼 수 있습니다.
+
+
 ## 프로젝트 목표
 
 이 프로젝트는 채용공고 데이터를 사용해 아래 흐름을 구성합니다.
@@ -1184,7 +1636,8 @@ Container       : Docker Compose
 │       ├── pytest.yml
 │       └── smoke.yml
 ├── dags/
-│   └── jobskill_pipeline_dag.py
+│   ├── jobskill_pipeline_dag.py
+│   └── jobskill_feedback_ops_dag.py
 ├── docker/
 │   ├── airflow/
 │   │   └── Dockerfile
@@ -1263,7 +1716,9 @@ Container       : Docker Compose
 │   │   ├── check_model_performance.py
 │   │   ├── check_model_class_performance.py
 │   │   ├── check_prediction_quality.py
-│   │   └── check_prediction_drift.py
+│   │   ├── check_prediction_drift.py
+│   │   ├── check_production_feedback.py
+│   │   └── check_retraining_candidate.py
 │   ├── reporting/
 │   │   ├── generate_pipeline_report.py
 │   │   ├── generate_model_card.py

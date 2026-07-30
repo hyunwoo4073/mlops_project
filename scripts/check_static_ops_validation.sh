@@ -42,6 +42,14 @@ check_command \
   "Compile monitoring metrics" \
   python -m py_compile src/monitoring/prometheus_metrics.py
 
+check_command \
+  "Compile retraining candidate check" \
+  python -m py_compile src/quality/check_retraining_candidate.py
+
+check_command \
+  "Compile feedback ops DAG" \
+  python -m py_compile dags/jobskill_feedback_ops_dag.py
+
 if test -f src/reporting/generate_incident_response_report.py; then
   check_command \
     "Compile incident response report" \

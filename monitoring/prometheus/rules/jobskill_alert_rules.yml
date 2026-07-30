@@ -200,7 +200,13 @@ groups:
           prometheus_url: "http://localhost:9090/graph?g0.expr=sum%20by%20(receiver%2C%20integration)%20(increase(alertmanager_notifications_failed_total%5B5m%5D))"
 
       - alert: JobSkillProductionFeedbackLowAccuracy
-        expr: jobskill_production_feedback_total >= 10 and jobskill_production_feedback_accuracy < 0.7
+        expr: |
+          (
+            jobskill_production_feedback_total >= 10
+            and
+            jobskill_production_feedback_accuracy < 0.7
+          )
+          and on() jobskill_alert_maintenance_mode == 0
         for: 5m
         labels:
           severity: warning
@@ -209,11 +215,17 @@ groups:
           summary: "Production feedback accuracy is low"
           description: "Production feedback accuracy is below the required threshold. Review recent prediction feedback records and consider retraining, rollback, or threshold adjustment."
           runbook_url: "http://localhost:8000/runbooks/jobskill_production_feedback_low_accuracy.md"
-          dashboard_url: "http://localhost:3000"
+          dashboard_url: "http://localhost:8501"
           prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_production_feedback_accuracy"
 
       - alert: JobSkillProductionFeedbackLowF1
-        expr: jobskill_production_feedback_total >= 10 and jobskill_production_feedback_f1_weighted < 0.7
+        expr: |
+          (
+            jobskill_production_feedback_total >= 10
+            and
+            jobskill_production_feedback_f1_weighted < 0.7
+          )
+          and on() jobskill_alert_maintenance_mode == 0
         for: 5m
         labels:
           severity: warning
@@ -222,11 +234,15 @@ groups:
           summary: "Production feedback weighted F1 is low"
           description: "Production feedback weighted F1 is below the required threshold. Check class-level degradation, recent feedback distribution, and whether retraining is needed."
           runbook_url: "http://localhost:8000/runbooks/jobskill_production_feedback_low_accuracy.md"
-          dashboard_url: "http://localhost:3000"
+          dashboard_url: "http://localhost:8501"
           prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_production_feedback_f1_weighted"
 
       - alert: JobSkillRetrainingCandidateDetected
-        expr: jobskill_alert_maintenance_mode == 0 and jobskill_retraining_candidate_flag == 1
+        expr: |
+          (
+            jobskill_retraining_candidate_flag == 1
+          )
+          and on() jobskill_alert_maintenance_mode == 0
         for: 5m
         labels:
           severity: warning
@@ -235,5 +251,5 @@ groups:
           summary: "재학습 후보 모델이 감지되었습니다"
           description: "Production Feedback 기반 판단 결과 현재 promoted model이 재학습 후보로 분류되었습니다. 최근 feedback 정확도, Weighted F1, 하락 추세, 오분류 집중 패턴을 확인하고 재학습 또는 롤백 필요 여부를 검토하세요."
           runbook_url: "http://localhost:8000/runbooks/jobskill_retraining_candidate_detected.md"
-          dashboard_url: "http://localhost:3000"
+          dashboard_url: "http://localhost:8501"
           prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_retraining_candidate_flag"

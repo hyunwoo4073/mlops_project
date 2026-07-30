@@ -44,7 +44,7 @@ print_related_logs() {
     docker compose logs --tail=100 postgres || true
   fi
 
-  if [[ "$name" == *"Production feedback"* || "$name" == *"Prediction feedback"* ]]; then
+  if [[ "$name" == *"Production feedback"* || "$name" == *"Prediction feedback"* || "$name" == *"Retraining candidate"* ]]; then
     docker compose logs --tail=100 airflow-scheduler || true
     docker compose logs --tail=100 api || true
     docker compose logs --tail=100 postgres || true
@@ -157,6 +157,13 @@ check_command \
   "Airflow pipeline tasks" \
   "docker compose exec -T airflow-scheduler airflow tasks list jobskill_mlops_pipeline"
 
+check_command \
+  "Airflow feedback ops tasks" \
+  "docker compose exec -T airflow-scheduler airflow tasks list jobskill_feedback_ops > /tmp/jobskill_feedback_ops_tasks.txt && \
+   grep -q show_feedback_ops_config /tmp/jobskill_feedback_ops_tasks.txt && \
+   grep -q check_production_feedback /tmp/jobskill_feedback_ops_tasks.txt && \
+   grep -q check_retraining_candidate /tmp/jobskill_feedback_ops_tasks.txt"
+
 check_http \
   "MLflow UI" \
   "http://localhost:5000"
@@ -187,7 +194,13 @@ check_command \
    grep -q jobskill_model_predictions_total /tmp/jobskill_metrics.txt && \
    grep -q jobskill_production_feedback_total /tmp/jobskill_metrics.txt && \
    grep -q jobskill_production_feedback_accuracy /tmp/jobskill_metrics.txt && \
-   grep -q jobskill_production_feedback_f1_weighted /tmp/jobskill_metrics.txt"
+   grep -q jobskill_production_feedback_f1_weighted /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_retraining_candidate_flag /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_retraining_candidate_feedback_count /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_retraining_candidate_accuracy /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_retraining_candidate_f1_weighted /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_retraining_candidate_accuracy_delta /tmp/jobskill_metrics.txt && \
+   grep -q jobskill_retraining_candidate_f1_delta /tmp/jobskill_metrics.txt"
 
 check_command \
   "FastAPI sample prediction requests" \
@@ -251,11 +264,39 @@ check_command \
   \" | grep -q OK"
 
 check_command \
+  "Retraining candidate evaluation" \
+  "docker compose exec -T airflow-scheduler bash -lc \"
+    cd /opt/airflow/project &&
+    python src/quality/check_retraining_candidate.py
+  \""
+
+check_command \
+  "Retraining candidate check results" \
+  "docker exec jobskill-postgres psql -U jobskill -d jobskill -tAc \"
+    SELECT CASE
+      WHEN COUNT(*) > 0 THEN 'OK'
+      ELSE 'FAIL'
+    END
+    FROM pipeline_check_results
+    WHERE check_type = 'RETRAINING_CANDIDATE';
+  \" | grep -q OK"
+
+check_command \
   "Production feedback metrics" \
   "curl -fsS http://localhost:8000/metrics > /tmp/jobskill_production_feedback_metrics.txt && \
    grep -q jobskill_production_feedback_total /tmp/jobskill_production_feedback_metrics.txt && \
    grep -q jobskill_production_feedback_accuracy /tmp/jobskill_production_feedback_metrics.txt && \
    grep -q jobskill_production_feedback_f1_weighted /tmp/jobskill_production_feedback_metrics.txt"
+
+check_command \
+  "Retraining candidate metrics" \
+  "curl -fsS http://localhost:8000/metrics > /tmp/jobskill_retraining_candidate_metrics.txt && \
+   grep -q jobskill_retraining_candidate_flag /tmp/jobskill_retraining_candidate_metrics.txt && \
+   grep -q jobskill_retraining_candidate_feedback_count /tmp/jobskill_retraining_candidate_metrics.txt && \
+   grep -q jobskill_retraining_candidate_accuracy /tmp/jobskill_retraining_candidate_metrics.txt && \
+   grep -q jobskill_retraining_candidate_f1_weighted /tmp/jobskill_retraining_candidate_metrics.txt && \
+   grep -q jobskill_retraining_candidate_accuracy_delta /tmp/jobskill_retraining_candidate_metrics.txt && \
+   grep -q jobskill_retraining_candidate_f1_delta /tmp/jobskill_retraining_candidate_metrics.txt"
 
 check_http \
   "Prometheus UI" \

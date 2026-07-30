@@ -76,6 +76,10 @@ check_command \
   python -m py_compile src/monitoring/prometheus_metrics.py
 
 check_command \
+  "Compile retraining candidate check" \
+  python -m py_compile src/quality/check_retraining_candidate.py
+
+check_command \
   "Compile FastAPI app" \
   python -m py_compile src/inference/api.py
 
