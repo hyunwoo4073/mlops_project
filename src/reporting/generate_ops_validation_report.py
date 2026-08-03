@@ -298,9 +298,10 @@ def fetch_promoted_models(engine: Engine) -> list[dict[str, Any]]:
     if "id" in columns and order_column != "id":
         order_sql = f"{order_sql}, id DESC" if order_sql else "ORDER BY id DESC"
 
+    select_sql = ",\n            ".join(select_parts)
     query = f"""
         SELECT
-            {",\n            ".join(select_parts)}
+            {select_sql}
         FROM model_registry
         {order_sql}
         LIMIT 5
