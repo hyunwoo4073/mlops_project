@@ -13,38 +13,20 @@ make up
 make create-tables
 ```
 
-## 3. Airflow 확인
-
-```bash
-make dag-list
-make dag-errors
-make dag-tasks
-make feedback-ops-dag-tasks
-```
-
-## 4. 기본 endpoint 확인
-
-```bash
-curl -fsS http://localhost:8000/health
-curl -fsS http://localhost:8000/ready
-curl -fsS http://localhost:8000/model
-curl -fsS http://localhost:8000/metrics | head
-```
-
-## 5. 기본 검증
+## 3. 기본 검증
 
 ```bash
 make ops-static-check
 make smoke
 ```
 
-## 6. 운영 검증 전체 실행
+## 4. 운영 검증 전체 실행
 
 ```bash
 make ops-check
 ```
 
-## 7. Production Feedback / Retraining
+## 5. Production Feedback / Retraining
 
 ```bash
 make production-feedback-sample
@@ -58,15 +40,7 @@ metric 확인:
 curl -fsS http://localhost:8000/metrics | grep -E "jobskill_production_feedback|jobskill_retraining_candidate"
 ```
 
-## 8. Feedback Ops DAG
-
-```bash
-make feedback-ops-dag-tasks
-make feedback-ops-dag-info
-make feedback-ops-dag-trigger
-```
-
-## 9. Alert Lifecycle / Synthetic Alert 정리
+## 6. Alert Lifecycle / Synthetic Alert 정리
 
 ```bash
 make alert-webhook-lifecycle-check
@@ -75,14 +49,25 @@ make synthetic-alert-cleanup
 make synthetic-alert-check
 ```
 
-## 10. 운영 리포트 / 증빙 번들
+## 7. 운영 리포트 / 증빙 번들
 
 ```bash
 make ops-report
-cat reports/latest_ops_validation_report.md
-
 make ops-evidence-bundle
-ls -lh reports/ops_evidence/
+make ops-evidence-check
+```
+
+## 8. CI evidence 흐름 로컬 확인
+
+```bash
+make ops-evidence-ci
+```
+
+## 9. CI diagnostics 로컬 확인
+
+```bash
+make ci-diagnostics
+ls -R reports/ci_diagnostics | head -80
 ```
 
 ## 권장 최종 검증 흐름
@@ -91,4 +76,5 @@ ls -lh reports/ops_evidence/
 make ops-check
 make ops-report
 make ops-evidence-bundle
+make ops-evidence-check
 ```

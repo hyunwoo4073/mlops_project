@@ -3,9 +3,9 @@
 [![Python CI](https://github.com/hyunwoo4073/mlops_project/actions/workflows/pytest.yml/badge.svg)](https://github.com/hyunwoo4073/mlops_project/actions/workflows/pytest.yml)
 [![Smoke Check](https://github.com/hyunwoo4073/mlops_project/actions/workflows/smoke.yml/badge.svg)](https://github.com/hyunwoo4073/mlops_project/actions/workflows/smoke.yml)
 
-채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow, MLflow, FastAPI, Streamlit, Prometheus, Alertmanager, Grafana를 연결해 로컬에서 end-to-end MLOps 운영 흐름을 검증하는 프로젝트입니다.
+채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow, MLflow, FastAPI, Streamlit, Prometheus, Alertmanager, Grafana를 연결해 로컬과 CI에서 end-to-end MLOps 운영 흐름을 검증하는 프로젝트입니다.
 
-이 프로젝트는 단순 모델 학습이 아니라 데이터 품질 검증, 모델 성능 검증, 모델 승격/롤백, API serving, production feedback 평가, 재학습 후보 판단, Prometheus metric, alert rule, runbook, smoke check, ops report, evidence bundle까지 포함한 운영형 MLOps 파이프라인을 목표로 합니다.
+이 프로젝트는 단순 모델 학습이 아니라 데이터 품질 검증, 모델 성능 검증, 모델 승격/롤백, API serving, production feedback 평가, 재학습 후보 판단, Prometheus metric, alert rule, runbook, smoke check, ops report, evidence bundle, CI failure diagnostics까지 포함한 운영형 MLOps 파이프라인을 목표로 합니다.
 
 ## 문서 구성
 
@@ -49,6 +49,7 @@ Job Data
 → Alertmanager / Slack / Runbook
 → Streamlit / Grafana Dashboard
 → Ops Check / Ops Report / Evidence Bundle
+→ GitHub Actions Evidence / Diagnostics Artifacts
 ```
 
 ## 주요 기능
@@ -89,7 +90,7 @@ Monitoring / Alerting
 - MTTA / MTTR / acknowledgement metric
 - maintenance mode / silence / incident report
 
-Ops Validation
+Ops Validation / Evidence
 - Makefile 기반 명령어 표준화
 - smoke check
 - static ops validation
@@ -98,6 +99,9 @@ Ops Validation
 - alert webhook lifecycle check
 - ops validation report
 - ops evidence bundle ZIP 생성
+- ops evidence bundle 검증
+- GitHub Actions evidence artifact 업로드
+- CI 실패 진단 artifact 업로드
 ```
 
 ## 주요 명령어
@@ -109,10 +113,6 @@ make build
 make up
 make create-tables
 
-make dag-list
-make dag-errors
-make dag-tasks
-
 make ops-static-check
 make smoke
 make ops-check
@@ -121,14 +121,15 @@ make production-feedback-sample
 make production-feedback-check
 make retraining-candidate-check
 
-make feedback-ops-dag-tasks
-make feedback-ops-dag-trigger
-
 make alert-webhook-lifecycle-check
 make synthetic-alert-check
 
 make ops-report
 make ops-evidence-bundle
+make ops-evidence-check
+make ops-evidence-ci
+
+make ci-diagnostics
 ```
 
 ## 접속 URL
@@ -146,6 +147,13 @@ Grafana      http://localhost:3000
 ## 최근 업데이트
 
 ```text
+2026-08-03
+- ops evidence bundle 검증 스크립트 추가
+- CI에서 ops evidence bundle 생성/검증/artifact 업로드 흐름 추가
+- CI 실패 시 diagnostics artifact 수집/업로드 흐름 추가
+- Python 3.11 기준 ops validation report f-string syntax 오류 수정
+- README / SUMMARY / FULL / QUICKSTART 문서 역할 재정리
+
 2026-07-31
 - Makefile을 카테고리별로 정리
 - static ops validation / smoke check / ops-check 구조 정리
@@ -159,16 +167,6 @@ Grafana      http://localhost:3000
 - feedback ops 전용 Airflow DAG 추가
 - production feedback / retraining alert rule 정리
 - maintenance mode suppression rule test 반영
-
-2026-07-29
-- Streamlit Production Feedback 탭 추가
-- Retraining Candidate Dashboard 추가
-- retraining candidate metric / alert / runbook 추가
-
-2026-07-28
-- Production Feedback Evaluation Loop 추가
-- prediction_feedbacks 테이블과 feedback 평가 스크립트 추가
-- production feedback metric / alert / runbook 추가
 ```
 
 ## 빠른 실행
@@ -179,6 +177,15 @@ make up
 make create-tables
 make ops-static-check
 make smoke
+```
+
+운영 검증 산출물 생성:
+
+```bash
+make ops-check
+make ops-report
+make ops-evidence-bundle
+make ops-evidence-check
 ```
 
 상세 실행 절차는 `docs/QUICKSTART.md`를 확인합니다.

@@ -152,6 +152,10 @@ check_python_compile \
   "Compile ops evidence bundle creator" \
   scripts/create_ops_evidence_bundle.py
 
+check_python_compile \
+  "Compile ops evidence bundle checker" \
+  scripts/check_ops_evidence_bundle.py
+
 check_optional_python_compile \
   "Compile incident response report" \
   src/reporting/generate_incident_response_report.py
@@ -204,6 +208,10 @@ check_shell_syntax \
 check_shell_syntax \
   "Validate alert workflow shell syntax" \
   scripts/check_alert_workflow.sh
+
+check_shell_syntax \
+  "Validate CI diagnostics shell syntax" \
+  scripts/collect_ci_diagnostics.sh
 
 check_shell_syntax \
   "Validate static ops validation shell syntax" \

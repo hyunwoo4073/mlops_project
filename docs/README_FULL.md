@@ -30,6 +30,23 @@ docs/QUICKSTART.md
 ## 주요 업데이트 내역
 
 ```text
+2026-08-03
+- `scripts/check_ops_evidence_bundle.py` 추가로 `reports/ops_evidence/jobskill_ops_evidence_*.zip` 내부 필수 산출물 검증 기능 추가
+- `Makefile`에 `ops-evidence-check` target을 추가해 README, QuickStart, Ops Validation Report, manifest, runbook 포함 여부를 검증하도록 개선
+- `Makefile`에 `ops-evidence-ci` target을 추가해 `ops-report → ops-evidence-bundle → ops-evidence-check` 흐름을 CI에서 한 번에 실행하도록 구성
+- `scripts/check_static_ops_validation.sh`에 ops evidence bundle checker compile 검증과 CI diagnostics shell syntax 검증 추가
+- `src/reporting/generate_ops_validation_report.py`에서 Python 3.11 기준 f-string 내부 backslash syntax error를 수정해 CI Ruff 검사 실패를 해결
+- `generate_ops_validation_report.py`의 model registry 조회 로직을 `information_schema.columns` 기반 optional column 감지 방식으로 유지하면서 Python 3.11 호환성을 확보
+- GitHub Actions `smoke.yml`에서 smoke check와 alert workflow smoke check 이후 `make ops-evidence-ci`를 실행하도록 정리
+- GitHub Actions `smoke.yml`에 `actions/upload-artifact@v4` 기반 `jobskill-ops-evidence` artifact 업로드 단계 추가
+- CI 환경변수에 `FEEDBACK_OPS_DAG_SCHEDULE=manual`, production feedback/retraining threshold 값을 명시해 smoke workflow의 feedback ops 검증 안정성 개선
+- CI runtime 준비 단계에서 `reports/ops_evidence`, `.secrets/slack_webhook_url` placeholder를 생성하도록 정리
+- `scripts/collect_ci_diagnostics.sh` 추가로 CI 실패 시 Docker Compose 상태, 서비스 로그, DB row count, pipeline check 결과, current alert, alert event, endpoint 응답을 수집하도록 개선
+- `Makefile`에 `ci-diagnostics` target 추가
+- GitHub Actions `smoke.yml`에 실패 시 `jobskill-ci-diagnostics` artifact를 업로드하도록 CI failure diagnostics 흐름 추가
+- 성공 시에는 `jobskill-ops-evidence`, 실패 시에는 `jobskill-ci-diagnostics`가 남도록 CI 산출물 역할을 분리
+- README 문서 구조를 재정리해 `README.md`는 짧은 메인 소개, `docs/README_SUMMARY.md`는 검토자용 요약, `docs/README_FULL.md`는 기존 긴 상세 문서 보존, `docs/QUICKSTART.md`는 실행 명령어 중심으로 분리
+
 2026-07-31
 - `Makefile`을 Build/Run, Database/Airflow, Pipeline DAG, Feedback Ops DAG, Quality/MLOps Validation, Alert/Incident Ops, Ops Validation, Reports/Model Ops, Apps, Monitoring, Alertmanager, Notification, Maintenance 카테고리로 재정리
 - `Makefile`의 `.PHONY`, help 출력, 실제 target 순서를 카테고리 기준으로 맞추고 `docker compose`, `airflow-scheduler`, `/opt/airflow/project` 하드코딩을 변수 기반으로 정리
@@ -1472,6 +1489,241 @@ make ops-evidence-bundle
 ```
 
 이 기능을 통해 단순히 검증 명령어를 실행하는 수준을 넘어, 운영 검증 결과와 관련 문서/설정을 포트폴리오 또는 인수인계용 증빙 산출물로 남길 수 있습니다.
+
+
+
+## Ops Evidence Bundle Validation
+
+Ops Evidence Bundle Validation은 생성된 증빙 ZIP 파일이 실제로 필요한 운영 산출물을 포함하고 있는지 검증하는 단계입니다.
+
+기존 흐름은 아래와 같았습니다.
+
+```text
+make ops-report
+→ reports/latest_ops_validation_report.md 생성
+
+make ops-evidence-bundle
+→ reports/ops_evidence/jobskill_ops_evidence_*.zip 생성
+```
+
+이번 개선으로 아래 검증이 추가되었습니다.
+
+```text
+make ops-evidence-check
+→ 최신 evidence bundle ZIP 내부 필수 파일 검증
+```
+
+구성 파일:
+
+```text
+scripts/check_ops_evidence_bundle.py
+```
+
+필수 검증 대상:
+
+```text
+README.md
+docs/README_SUMMARY.md
+docs/QUICKSTART.md
+reports/latest_ops_validation_report.md
+OPS_EVIDENCE_BUNDLE.md
+ops_evidence_manifest.json
+docs/runbooks/*.md
+```
+
+권장 검증 대상:
+
+```text
+docs/README_FULL.md
+monitoring/metrics_contract.yml
+monitoring/prometheus/prometheus.yml
+monitoring/prometheus/rules/jobskill_alert_rules.yml
+monitoring/prometheus/tests/jobskill_alert_rules.test.yml
+monitoring/alertmanager/alertmanager.yml
+docker-compose.yml
+Makefile
+```
+
+실행:
+
+```bash
+make ops-evidence-check
+```
+
+특정 bundle 지정:
+
+```bash
+python scripts/check_ops_evidence_bundle.py   --bundle-path reports/ops_evidence/jobskill_ops_evidence_YYYYMMDD_HHMMSS.zip
+```
+
+권장 파일 누락도 실패로 처리하려면:
+
+```bash
+python scripts/check_ops_evidence_bundle.py --strict-recommended
+```
+
+권장 최종 흐름:
+
+```bash
+make ops-check
+make ops-report
+make ops-evidence-bundle
+make ops-evidence-check
+```
+
+이 기능은 증빙 ZIP을 생성하는 데서 끝나지 않고, ZIP 내부의 문서/설정/runbook/manifest 완전성까지 검증하기 위한 목적입니다.
+
+## CI Ops Evidence Artifact
+
+GitHub Actions Smoke Check에서 운영 증빙 ZIP을 artifact로 업로드하도록 개선했습니다.
+
+기존에는 로컬에서만 아래 명령을 실행할 수 있었습니다.
+
+```bash
+make ops-report
+make ops-evidence-bundle
+make ops-evidence-check
+```
+
+이번 개선으로 CI에서는 아래 target을 사용합니다.
+
+```bash
+make ops-evidence-ci
+```
+
+`ops-evidence-ci`는 아래 순서로 실행됩니다.
+
+```text
+ops-report
+→ ops-evidence-bundle
+→ ops-evidence-check
+```
+
+GitHub Actions `smoke.yml`에서는 smoke check와 alert workflow smoke check가 완료된 뒤 evidence bundle을 생성하고 업로드합니다.
+
+```text
+Run smoke check
+→ Run alert workflow smoke check
+→ Generate and validate ops evidence bundle
+→ Upload ops evidence bundle
+```
+
+업로드 artifact:
+
+```text
+jobskill-ops-evidence
+```
+
+포함 대상:
+
+```text
+reports/latest_ops_validation_report.md
+reports/ops_evidence/*.zip
+```
+
+이 흐름을 통해 PR 또는 feature branch push마다 운영 검증 결과를 GitHub Actions artifact로 다운로드할 수 있습니다.
+
+## CI Failure Diagnostics
+
+CI Failure Diagnostics는 smoke workflow가 실패했을 때 원인 분석에 필요한 정보를 자동 수집하는 기능입니다.
+
+성공 시 생성되는 `jobskill-ops-evidence`는 포트폴리오/인수인계용 증빙입니다. 반면 `jobskill-ci-diagnostics`는 실패 분석용 산출물입니다.
+
+구성 파일:
+
+```text
+scripts/collect_ci_diagnostics.sh
+```
+
+Makefile 명령어:
+
+```bash
+make ci-diagnostics
+```
+
+수집 대상:
+
+```text
+Docker / Docker Compose version
+docker compose ps
+Docker images
+disk / memory usage
+PostgreSQL, Airflow, MLflow, FastAPI, Dashboard, Alertmanager, Prometheus, Grafana logs
+주요 테이블 row count
+최근 pipeline_check_results
+current firing alerts
+recent alert_events
+recent model_registry records
+FastAPI health / ready / model / metrics
+Prometheus readiness / alerts / targets
+Alertmanager readiness / alerts
+Grafana health
+Streamlit dashboard response
+```
+
+생성 위치:
+
+```text
+reports/ci_diagnostics/
+```
+
+GitHub Actions에서는 실패 시 아래 artifact를 업로드합니다.
+
+```text
+jobskill-ci-diagnostics
+```
+
+성공/실패 산출물 역할은 아래처럼 분리됩니다.
+
+```text
+성공 시
+→ jobskill-ops-evidence
+→ 운영 검증 결과와 문서/설정/runbook 증빙
+
+실패 시
+→ jobskill-ci-diagnostics
+→ 로그, DB 상태, endpoint 응답, alert 상태 기반 실패 원인 분석 자료
+```
+
+스크립트는 주요 secret 패턴을 redaction 처리합니다.
+
+```text
+DB_PASSWORD
+AIRFLOW_DB_PASSWORD
+AIRFLOW_JWT_SECRET
+AIRFLOW_API_SECRET_KEY
+AIRFLOW_FERNET_KEY
+SLACK_WEBHOOK_URL
+Slack webhook URL pattern
+```
+
+## CI Smoke Workflow Evidence Flow
+
+최종 CI smoke workflow는 아래 흐름을 가집니다.
+
+```text
+Checkout
+→ Create CI env file
+→ Check rendered Compose config
+→ Prepare runtime directories
+→ Build images
+→ Run static ops validation
+→ Check repository artifacts
+→ Start PostgreSQL
+→ Create project tables
+→ Initialize Airflow metadata DB
+→ Start Airflow / MLflow
+→ Run minimal pipeline
+→ Verify promoted model
+→ Start API / Dashboard / Alertmanager / Prometheus / Grafana
+→ Run smoke check
+→ Run alert workflow smoke check
+→ Generate and validate ops evidence bundle
+→ Upload ops evidence bundle
+→ On failure, collect and upload CI diagnostics
+```
+
+이 구조를 통해 CI는 단순 성공/실패만 보여주는 것이 아니라, 성공 시 운영 증빙을 남기고 실패 시 진단 자료를 남기는 형태로 확장됩니다.
 
 
 
