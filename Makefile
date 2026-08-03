@@ -41,8 +41,8 @@ ALL_RUNTIME_SERVICES := $(AIRFLOW_SERVICES) $(APP_SERVICES)
 	production-feedback-sample production-feedback-check retraining-candidate-check \
 	alert-webhook-lifecycle-check synthetic-alert-plan synthetic-alert-cleanup synthetic-alert-check \
 	alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check \
-	ops-static-check ops-check repo-artifact-check compose-config-check \
-	report incident-report incident-drill ops-report ops-evidence-bundle \
+	ops-static-check ops-check repo-artifact-check compose-config-check ci-diagnostics \
+	report incident-report incident-drill ops-report ops-evidence-bundle ops-evidence-check ops-evidence-ci \
 	model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check \
 	notify notification-check notification-test-alert notification-resolve-alert \
 	dashboard dashboard-logs api api-logs api-sample mlflow mlflow-logs \
@@ -109,11 +109,14 @@ help:
 	@echo "  make ops-check                              Run full local ops validation checks"
 	@echo "  make repo-artifact-check                    Check generated/runtime artifacts are not committed"
 	@echo "  make compose-config-check                   Validate rendered Docker Compose config"
+	@echo "  make ci-diagnostics                         Collect CI failure diagnostics"
 	@echo ""
 	@echo "Reports / Model Ops"
 	@echo "  make report                                 Generate pipeline report"
 	@echo "  make ops-report                             Generate local ops validation report"
 	@echo "  make ops-evidence-bundle                    Create zipped ops evidence bundle"
+	@echo "  make ops-evidence-check                     Validate latest ops evidence bundle"
+	@echo "  make ops-evidence-ci                        Generate and validate ops evidence bundle for CI"
 	@echo "  make model-archive                          Archive current promoted model"
 	@echo "  make model-card                             Generate promoted model card report"
 	@echo "  make model-card-check                       Validate latest Model Card consistency"
@@ -309,6 +312,9 @@ repo-artifact-check:
 compose-config-check:
 	python scripts/check_compose_rendered_config.py
 
+ci-diagnostics:
+	bash scripts/collect_ci_diagnostics.sh
+
 # -----------------------------------------------------------------------------
 # Reports / Model Ops
 # -----------------------------------------------------------------------------
@@ -320,6 +326,12 @@ ops-report:
 
 ops-evidence-bundle:
 	python scripts/create_ops_evidence_bundle.py
+
+ops-evidence-check:
+	python scripts/check_ops_evidence_bundle.py
+
+ops-evidence-ci: ops-report ops-evidence-bundle ops-evidence-check
+	@echo "Ops evidence bundle generated and validated"
 
 model-archive:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/archive_promoted_model.py"

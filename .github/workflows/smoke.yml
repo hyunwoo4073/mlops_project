@@ -73,6 +73,17 @@ jobs:
           REMOTEOK_MIN_FETCHED_JOBS=0
 
           DATA_SOURCE_MODE=sample_only
+
+          FEEDBACK_OPS_DAG_SCHEDULE=manual
+
+          PRODUCTION_FEEDBACK_STRICT=false
+          RETRAINING_CANDIDATE_STRICT=false
+          MIN_PRODUCTION_FEEDBACK_ROWS=10
+          MIN_PRODUCTION_ACCURACY=0.0
+          MIN_PRODUCTION_F1_WEIGHTED=0.0
+          PRODUCTION_FEEDBACK_WINDOW_DAYS=30
+          PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD=0.05
+          PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS=3
           EOF
 
       - name: Check rendered Compose config
@@ -81,9 +92,22 @@ jobs:
 
       - name: Prepare runtime directories
         run: |
-          mkdir -p data/raw data/processed models/best mlartifacts airflow_logs reports docs/images
+          mkdir -p \
+            data/raw \
+            data/processed \
+            models/best \
+            mlartifacts \
+            airflow_logs \
+            reports \
+            reports/ops_evidence \
+            docs/images \
+            .secrets
+
           touch simple_auth_manager_passwords.json
+          printf 'ci-placeholder-slack-webhook\n' > .secrets/slack_webhook_url
+
           chmod -R 777 data models mlartifacts airflow_logs reports
+          chmod 600 .secrets/slack_webhook_url || true
 
       - name: Build images
         run: |
@@ -94,7 +118,8 @@ jobs:
           make ops-static-check
 
       - name: Check repository artifacts
-        run: make repo-artifact-check
+        run: |
+          make repo-artifact-check
 
       - name: Start PostgreSQL
         run: |
@@ -199,6 +224,34 @@ jobs:
       - name: Run alert workflow smoke check
         run: |
           ./scripts/check_alert_workflow.sh
+
+      - name: Generate and validate ops evidence bundle
+        run: |
+          make ops-evidence-ci
+
+      - name: Upload ops evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobskill-ops-evidence
+          path: |
+            reports/latest_ops_validation_report.md
+            reports/ops_evidence/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect CI diagnostics on failure
+        if: failure()
+        run: |
+          make ci-diagnostics
+
+      - name: Upload CI diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobskill-ci-diagnostics
+          path: reports/ci_diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Show logs on failure
         if: failure()
