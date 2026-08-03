@@ -5,6 +5,7 @@ POSTGRES_CONTAINER ?= jobskill-postgres
 POSTGRES_USER ?= jobskill
 POSTGRES_DB ?= jobskill
 DAG_ID ?= jobskill_mlops_pipeline
+FEEDBACK_OPS_DAG_ID ?= jobskill_feedback_ops
 API_URL ?= http://localhost:8000
 PROMETHEUS_URL ?= http://localhost:9090
 ALERTMANAGER_URL ?= http://localhost:9093
@@ -34,19 +35,20 @@ ALL_RUNTIME_SERVICES := $(AIRFLOW_SERVICES) $(APP_SERVICES)
 	build up down restart ps logs \
 	airflow-init create-tables psql \
 	dag-list dag-errors dag-tasks dag-trigger dag-runs \
+	feedback-ops-dag-tasks feedback-ops-dag-info feedback-ops-dag-trigger \
 	lint test test-container ci \
-	smoke data-contract-check model-class-performance-check drift-check production-feedback-sample production-feedback-check retraining-candidate-check feedback-ops-dag-tasks feedback-ops-dag-trigger \
-	alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check ops-static-check ops-check repo-artifact-check compose-config-check \
-	report incident-report incident-drill model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check \
+	smoke data-contract-check model-class-performance-check drift-check \
+	production-feedback-sample production-feedback-check retraining-candidate-check \
+	alert-webhook-lifecycle-check synthetic-alert-plan synthetic-alert-cleanup synthetic-alert-check \
+	alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check \
+	ops-static-check ops-check repo-artifact-check compose-config-check \
+	report incident-report incident-drill ops-report ops-evidence-bundle \
+	model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check \
 	notify notification-check notification-test-alert notification-resolve-alert \
-	dashboard dashboard-logs \
-	api api-logs api-sample \
-	mlflow mlflow-logs \
-	cleanup clean-runtime \
-	metrics \
-	prometheus prometheus-logs prometheus-check prometheus-rule-test prometheus-external-target-check \
-	alertmanager alertmanager-logs alertmanager-check \
-	grafana grafana-logs
+	dashboard dashboard-logs api api-logs api-sample mlflow mlflow-logs \
+	metrics prometheus prometheus-logs prometheus-check prometheus-rule-test prometheus-external-target-check \
+	alertmanager alertmanager-logs alertmanager-check grafana grafana-logs \
+	cleanup clean-runtime
 
 help:
 	@echo ""
@@ -54,7 +56,7 @@ help:
 	@echo ""
 	@echo "Build / Run"
 	@echo "  make build                                  Build Airflow and API images"
-	@echo "  make up                                     Start Airflow, MLflow, API, Dashboard, Alertmanager, Prometheus and Grafana"
+	@echo "  make up                                     Start main runtime services"
 	@echo "  make down                                   Stop services"
 	@echo "  make restart                                Recreate main runtime services"
 	@echo "  make ps                                     Show container status"
@@ -65,12 +67,17 @@ help:
 	@echo "  make create-tables                          Create or update project DB tables"
 	@echo "  make psql                                   Open PostgreSQL shell"
 	@echo ""
-	@echo "DAG"
+	@echo "Pipeline DAG"
 	@echo "  make dag-list                               List DAGs"
 	@echo "  make dag-errors                             Show DAG import errors"
 	@echo "  make dag-tasks                              List pipeline DAG tasks"
 	@echo "  make dag-trigger                            Trigger pipeline DAG"
 	@echo "  make dag-runs                               List pipeline DAG runs"
+	@echo ""
+	@echo "Feedback Ops DAG"
+	@echo "  make feedback-ops-dag-tasks                 List feedback ops DAG tasks"
+	@echo "  make feedback-ops-dag-info                  Show feedback ops DAG graph/info"
+	@echo "  make feedback-ops-dag-trigger               Trigger feedback ops DAG"
 	@echo ""
 	@echo "Quality / MLOps Validation"
 	@echo "  make lint                                   Run ruff"
@@ -83,13 +90,18 @@ help:
 	@echo "  make drift-check                            Run prediction distribution drift check"
 	@echo "  make production-feedback-sample             Create sample feedback from recent predictions"
 	@echo "  make production-feedback-check              Evaluate production feedback performance"
-	@echo "  retraining-candidate-check                  Evaluate and persist retraining candidate decision"
-	@echo "  feedback-ops-dag-tasks                      List feedback ops DAG tasks"
-	@echo "  feedback-ops-dag-info                       Show feedback ops DAG graph/info"
-	@echo "  feedback-ops-dag-trigger                    Trigger feedback ops DAG"
+	@echo "  make retraining-candidate-check             Evaluate and persist retraining candidate decision"
+	@echo ""
+	@echo "Alert / Incident Ops"
+	@echo "  make alert-webhook-lifecycle-check          Validate firing/resolved alert webhook lifecycle"
+	@echo "  make alert-workflow-check                   Run alert workflow smoke check"
+	@echo "  make synthetic-alert-plan                   Show synthetic/test alert cleanup candidates"
+	@echo "  make synthetic-alert-cleanup                Delete synthetic/test alerts and derived current-state alerts"
+	@echo "  make synthetic-alert-check                  Check whether synthetic/test alert rows remain"
+	@echo "  make incident-report                        Generate incident response report"
+	@echo "  make incident-drill                         Run synthetic incident response drill"
 	@echo ""
 	@echo "Ops Validation"
-	@echo "  make alert-workflow-check                   Run alert workflow smoke check"
 	@echo "  make runbook-check                          Validate alert runbook coverage"
 	@echo "  make metrics-contract-check                 Validate required Prometheus metrics"
 	@echo "  make alert-rule-metric-check                Validate alert rule metric dependencies"
@@ -100,8 +112,8 @@ help:
 	@echo ""
 	@echo "Reports / Model Ops"
 	@echo "  make report                                 Generate pipeline report"
-	@echo "  make incident-report                        Generate incident response report"
-	@echo "  make incident-drill                         Run synthetic incident response drill"
+	@echo "  make ops-report                             Generate local ops validation report"
+	@echo "  make ops-evidence-bundle                    Create zipped ops evidence bundle"
 	@echo "  make model-archive                          Archive current promoted model"
 	@echo "  make model-card                             Generate promoted model card report"
 	@echo "  make model-card-check                       Validate latest Model Card consistency"
@@ -117,19 +129,21 @@ help:
 	@echo "  make api-sample                             Send sample prediction requests to FastAPI"
 	@echo "  make mlflow                                 Start MLflow"
 	@echo "  make mlflow-logs                            Show MLflow logs"
-	@echo "  make metrics                                Show FastAPI Prometheus metrics"
 	@echo ""
-	@echo "Monitoring / Alerting"
+	@echo "Monitoring"
+	@echo "  make metrics                                Show FastAPI Prometheus metrics"
 	@echo "  make prometheus                             Start Prometheus"
 	@echo "  make prometheus-logs                        Show Prometheus logs"
 	@echo "  make prometheus-check                       Validate Prometheus config and alert rules"
 	@echo "  make prometheus-rule-test                   Run Prometheus alert rule unit tests"
 	@echo "  make prometheus-external-target-check       Check Prometheus external scrape targets"
+	@echo "  make grafana                                Start Grafana"
+	@echo "  make grafana-logs                           Show Grafana logs"
+	@echo ""
+	@echo "Alertmanager"
 	@echo "  make alertmanager                           Start Alertmanager"
 	@echo "  make alertmanager-logs                      Show Alertmanager logs"
 	@echo "  make alertmanager-check                     Validate Alertmanager config"
-	@echo "  make grafana                                Start Grafana"
-	@echo "  make grafana-logs                           Show Grafana logs"
 	@echo ""
 	@echo "Notification"
 	@echo "  make notify                                 Send or print pipeline status notification"
@@ -142,11 +156,16 @@ help:
 	@echo "  make clean-runtime                          Remove local runtime output files"
 	@echo ""
 	@echo "Useful variables"
+	@echo "  DAG_ID=jobskill_mlops_pipeline make dag-trigger"
+	@echo "  FEEDBACK_OPS_DAG_ID=jobskill_feedback_ops make feedback-ops-dag-trigger"
 	@echo "  LIMIT=30 WRONG_EVERY=5 make production-feedback-sample"
 	@echo "  MODEL_ROLLBACK_ARCHIVE_ID=1 make model-rollback-plan"
 	@echo "  MODEL_ROLLBACK_ARCHIVE_ID=1 make model-rollback"
 	@echo ""
 
+# -----------------------------------------------------------------------------
+# Build / Run
+# -----------------------------------------------------------------------------
 build:
 	$(COMPOSE) build airflow-image api
 
@@ -165,6 +184,9 @@ ps:
 logs:
 	$(COMPOSE) logs --tail=100
 
+# -----------------------------------------------------------------------------
+# Database / Airflow
+# -----------------------------------------------------------------------------
 airflow-init:
 	$(COMPOSE) up --no-build airflow-init
 
@@ -174,21 +196,39 @@ create-tables:
 psql:
 	docker exec -it $(POSTGRES_CONTAINER) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
 
+# -----------------------------------------------------------------------------
+# Pipeline DAG
+# -----------------------------------------------------------------------------
 dag-list:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) airflow dags list
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow dags list
 
 dag-errors:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) airflow dags list-import-errors
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow dags list-import-errors
 
 dag-tasks:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) airflow tasks list $(DAG_ID)
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow tasks list $(DAG_ID)
 
 dag-trigger:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) airflow dags trigger $(DAG_ID)
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow dags trigger $(DAG_ID)
 
 dag-runs:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) airflow dags list-runs $(DAG_ID)
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow dags list-runs $(DAG_ID)
 
+# -----------------------------------------------------------------------------
+# Feedback Ops DAG
+# -----------------------------------------------------------------------------
+feedback-ops-dag-tasks:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow tasks list $(FEEDBACK_OPS_DAG_ID)
+
+feedback-ops-dag-info:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow dags show $(FEEDBACK_OPS_DAG_ID)
+
+feedback-ops-dag-trigger:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) airflow dags trigger $(FEEDBACK_OPS_DAG_ID)
+
+# -----------------------------------------------------------------------------
+# Quality / MLOps Validation
+# -----------------------------------------------------------------------------
 lint:
 	ruff check src dags scripts tests
 
@@ -196,7 +236,7 @@ test:
 	pytest
 
 test-container:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && pytest"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && pytest"
 
 ci: lint test
 
@@ -204,13 +244,13 @@ smoke:
 	bash scripts/smoke_check.sh
 
 data-contract-check:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_data_contract.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_data_contract.py"
 
 model-class-performance-check:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_model_class_performance.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_model_class_performance.py"
 
 drift-check:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_prediction_drift.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_prediction_drift.py"
 
 production-feedback-sample:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/create_sample_prediction_feedback.py --limit $${LIMIT:-$(LIMIT)} --wrong-every $${WRONG_EVERY:-$(WRONG_EVERY)}"
@@ -219,20 +259,35 @@ production-feedback-check:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_production_feedback.py"
 
 retraining-candidate-check:
-	docker compose exec -T airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_retraining_candidate.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_retraining_candidate.py"
 
-feedback-ops-dag-tasks:
-	docker compose exec -T airflow-scheduler airflow tasks list jobskill_feedback_ops
-
-feedback-ops-dag-info:
-	docker compose exec -T airflow-scheduler airflow dags show jobskill_feedback_ops
-
-feedback-ops-dag-trigger:
-	docker compose exec -T airflow-scheduler airflow dags trigger jobskill_feedback_ops
+# -----------------------------------------------------------------------------
+# Alert / Incident Ops
+# -----------------------------------------------------------------------------
+alert-webhook-lifecycle-check:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/check_alert_webhook_lifecycle.py"
 
 alert-workflow-check:
 	bash scripts/check_alert_workflow.sh
 
+synthetic-alert-plan:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/manage_synthetic_alerts.py --mode plan --include-derived"
+
+synthetic-alert-cleanup:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/manage_synthetic_alerts.py --mode apply --include-derived"
+
+synthetic-alert-check:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/manage_synthetic_alerts.py --mode check"
+
+incident-report:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_incident_response_report.py"
+
+incident-drill:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && API_URL=http://api:8000 ALERTMANAGER_URL=http://alertmanager:9093 python scripts/run_incident_drill.py"
+
+# -----------------------------------------------------------------------------
+# Ops Validation
+# -----------------------------------------------------------------------------
 runbook-check:
 	python scripts/check_runbook_coverage.py
 
@@ -254,26 +309,29 @@ repo-artifact-check:
 compose-config-check:
 	python scripts/check_compose_rendered_config.py
 
+# -----------------------------------------------------------------------------
+# Reports / Model Ops
+# -----------------------------------------------------------------------------
 report:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_pipeline_report.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_pipeline_report.py"
 
-incident-report:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_incident_response_report.py"
+ops-report:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_ops_validation_report.py"
 
-incident-drill:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && API_URL=http://api:8000 ALERTMANAGER_URL=http://alertmanager:9093 python scripts/run_incident_drill.py"
+ops-evidence-bundle:
+	python scripts/create_ops_evidence_bundle.py
 
 model-archive:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/archive_promoted_model.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/archive_promoted_model.py"
 
 model-card:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_model_card.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_model_card.py"
 
 model-card-check:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/check_model_card_consistency.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/check_model_card_consistency.py"
 
 model-rollback-plan:
-	$(COMPOSE) exec \
+	$(COMPOSE) exec -T \
 		-e MODEL_ROLLBACK_ARCHIVE_ID="$${MODEL_ROLLBACK_ARCHIVE_ID:-}" \
 		-e MODEL_ROLLBACK_CREATED_BY="$${MODEL_ROLLBACK_CREATED_BY:-local-user}" \
 		-e MODEL_ROLLBACK_REASON="$${MODEL_ROLLBACK_REASON:-Manual rollback to archived promoted model.}" \
@@ -282,7 +340,7 @@ model-rollback-plan:
 		bash -lc "cd $(PROJECT_DIR) && python scripts/rollback_promoted_model.py"
 
 model-rollback:
-	$(COMPOSE) exec \
+	$(COMPOSE) exec -T \
 		-e MODEL_ROLLBACK_ARCHIVE_ID="$${MODEL_ROLLBACK_ARCHIVE_ID:-}" \
 		-e MODEL_ROLLBACK_CREATED_BY="$${MODEL_ROLLBACK_CREATED_BY:-local-user}" \
 		-e MODEL_ROLLBACK_REASON="$${MODEL_ROLLBACK_REASON:-Manual rollback to archived promoted model.}" \
@@ -291,20 +349,11 @@ model-rollback:
 		bash -lc "cd $(PROJECT_DIR) && python scripts/rollback_promoted_model.py"
 
 model-lifecycle-check:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/check_model_lifecycle_integrity.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/check_model_lifecycle_integrity.py"
 
-notify:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/notification/notify_pipeline_status.py"
-
-notification-check:
-	python scripts/check_notification_channel.py
-
-notification-test-alert:
-	SEND_TEST_ALERT=true python scripts/check_notification_channel.py
-
-notification-resolve-alert:
-	SEND_TEST_ALERT=true RESOLVE_TEST_ALERT=true python scripts/check_notification_channel.py
-
+# -----------------------------------------------------------------------------
+# Apps
+# -----------------------------------------------------------------------------
 dashboard:
 	$(COMPOSE) up -d dashboard
 
@@ -326,15 +375,9 @@ mlflow:
 mlflow-logs:
 	$(COMPOSE) logs --tail=100 mlflow
 
-cleanup:
-	$(COMPOSE) exec $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/maintenance/cleanup_old_records.py"
-
-clean-runtime:
-	rm -rf airflow_logs/*
-	rm -rf reports/*
-	rm -rf data/raw/*
-	rm -rf data/processed/*
-
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
 metrics:
 	curl -s $(API_URL)/metrics | head -80
 
@@ -362,6 +405,15 @@ prometheus-rule-test:
 prometheus-external-target-check:
 	python scripts/check_prometheus_external_targets.py --prometheus-url $(PROMETHEUS_URL)
 
+grafana:
+	$(COMPOSE) up -d grafana
+
+grafana-logs:
+	$(COMPOSE) logs --tail=100 grafana
+
+# -----------------------------------------------------------------------------
+# Alertmanager
+# -----------------------------------------------------------------------------
 alertmanager:
 	$(COMPOSE) up -d alertmanager
 
@@ -375,8 +427,29 @@ alertmanager-check:
 		$(ALERTMANAGER_IMAGE) \
 		check-config /etc/alertmanager/alertmanager.yml
 
-grafana:
-	$(COMPOSE) up -d grafana
+# -----------------------------------------------------------------------------
+# Notification
+# -----------------------------------------------------------------------------
+notify:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/notification/notify_pipeline_status.py"
 
-grafana-logs:
-	$(COMPOSE) logs --tail=100 grafana
+notification-check:
+	python scripts/check_notification_channel.py
+
+notification-test-alert:
+	SEND_TEST_ALERT=true python scripts/check_notification_channel.py
+
+notification-resolve-alert:
+	SEND_TEST_ALERT=true RESOLVE_TEST_ALERT=true python scripts/check_notification_channel.py
+
+# -----------------------------------------------------------------------------
+# Maintenance
+# -----------------------------------------------------------------------------
+cleanup:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/maintenance/cleanup_old_records.py"
+
+clean-runtime:
+	rm -rf airflow_logs/*
+	rm -rf reports/*
+	rm -rf data/raw/*
+	rm -rf data/processed/*

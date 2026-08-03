@@ -1,223 +1,108 @@
-# jobskill-mlops 요약
+# jobskill-mlops Summary
 
-## 프로젝트 목적
+## 한 줄 요약
 
-`jobskill-mlops`는 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, 모델 학습 이후 운영 품질 검증까지 연결하는 end-to-end MLOps 프로젝트입니다.
+채용공고 직무 분류 모델을 중심으로 데이터 적재, 학습, 검증, 배포, feedback 평가, 재학습 후보 판단, monitoring, alert, runbook, 운영 검증 산출물까지 연결한 로컬 MLOps 포트폴리오 프로젝트입니다.
 
-핵심 목표는 아래 흐름을 로컬 Docker Compose 환경에서 재현하는 것입니다.
-
-```text
-데이터 수집/생성
-→ PostgreSQL 적재
-→ 전처리
-→ 데이터 계약 검증
-→ 모델 학습
-→ MLflow 기록
-→ 모델 성능 검증
-→ 모델 승격
-→ batch/API inference
-→ production feedback 수집
-→ 운영 성능 평가
-→ 재학습 후보 판단
-→ Prometheus metric/alert
-→ runbook 기반 대응
-```
-
-## 핵심 구성
+## 핵심 가치
 
 ```text
-Workflow        : Apache Airflow 3.x
-Database        : PostgreSQL
-ML Lifecycle    : MLflow
-Model           : scikit-learn TF-IDF + Logistic Regression
-Serving         : FastAPI
-Dashboard       : Streamlit, Grafana
-Monitoring      : Prometheus
-Alerting        : Alertmanager, Slack webhook
-Validation      : Makefile, smoke check, rule test, metrics contract, runbook check
+단순 모델 학습 프로젝트가 아니라
+운영 가능한 MLOps 흐름을 로컬 Docker Compose 환경에서 재현하는 프로젝트
 ```
 
-## 오늘 추가된 운영 개선
-
-### 1. Retraining Candidate 자동화
-
-Production Feedback 기반 재학습 후보 판단을 CLI/Smoke Check/Airflow/Metric 흐름에 연결했습니다.
+## 전체 흐름
 
 ```text
-src/quality/check_retraining_candidate.py
-→ Makefile retraining-candidate-check
-→ smoke check
-→ pipeline_check_results
-→ FastAPI /metrics
-→ Prometheus alert
+Job Posting Data
+→ PostgreSQL
+→ Airflow
+→ Data Quality / Data Contract
+→ Model Training
+→ MLflow
+→ Model Promotion
+→ FastAPI / Batch Inference
+→ Production Feedback
+→ Retraining Candidate
+→ Prometheus / Alertmanager
+→ Streamlit / Grafana
+→ Ops Check / Ops Report / Evidence Bundle
 ```
 
-주요 metric:
+## 기술 스택
 
 ```text
-jobskill_retraining_candidate_flag
-jobskill_retraining_candidate_feedback_count
-jobskill_retraining_candidate_accuracy
-jobskill_retraining_candidate_f1_weighted
-jobskill_retraining_candidate_accuracy_delta
-jobskill_retraining_candidate_f1_delta
+Python
+Airflow
+PostgreSQL
+MLflow
+scikit-learn
+FastAPI
+Streamlit
+Prometheus
+Alertmanager
+Grafana
+Docker Compose
+GitHub Actions
 ```
 
-### 2. Feedback Ops Airflow DAG
-
-메인 학습 DAG와 별도로 운영 품질 점검 DAG를 추가했습니다.
+## 주요 구현 포인트
 
 ```text
-dags/jobskill_feedback_ops_dag.py
+1. Airflow 기반 end-to-end ML pipeline
+2. MLflow 기반 학습 이력, artifact, model registry 관리
+3. Data Contract / Quality Gate / Class-level Performance Gate
+4. promoted model archive와 rollback CLI
+5. FastAPI serving과 prediction log 저장
+6. production feedback 기반 운영 성능 재평가
+7. retraining candidate 판단 자동화
+8. Prometheus metric과 alert rule 구성
+9. Alertmanager webhook, Slack alert, runbook 연결
+10. Streamlit/Grafana 운영 대시보드
+11. smoke/static/ops validation 자동화
+12. ops report와 evidence bundle 산출물 생성
 ```
 
-DAG 흐름:
+## 2026-07-31 개선 요약
 
 ```text
-show_feedback_ops_config
-    ↓
-check_production_feedback
-    ↓
-check_retraining_candidate
+Makefile 정리
+- 명령어를 목적별 카테고리로 재정렬
+
+Static Ops Validation 정리
+- Python compile, shell syntax, config, runbook, metric dependency 검증 구조화
+
+Smoke Check 정리
+- 서비스 E2E 검증을 카테고리별로 정리
+- firing-only SmokeTestAlert 제거
+- alert webhook lifecycle 검증 추가
+
+Alert Hygiene 추가
+- synthetic alert plan / cleanup / check 도구 추가
+- 테스트 alert가 MTTA/MTTR metric을 오염시키지 않도록 개선
+
+Ops Report / Evidence Bundle 추가
+- 현재 운영 상태를 Markdown report로 저장
+- README, runbook, monitoring config, ops report를 ZIP 증빙으로 패키징
 ```
 
-운영 의미:
-
-```text
-jobskill_mlops_pipeline
-- 모델 생성/검증/승격 중심
-
-jobskill_feedback_ops
-- 운영 feedback 평가/재학습 후보 판단 중심
-```
-
-### 3. Schedule / threshold 환경변수화
-
-Feedback Ops DAG는 기본 daily schedule이지만, 환경변수로 수동 모드 전환이 가능합니다.
-
-```env
-FEEDBACK_OPS_DAG_SCHEDULE="0 9 * * *"
-```
-
-수동 모드:
-
-```env
-FEEDBACK_OPS_DAG_SCHEDULE=manual
-```
-
-주요 threshold:
-
-```text
-MIN_PRODUCTION_FEEDBACK_ROWS=10
-MIN_PRODUCTION_ACCURACY=0.70
-MIN_PRODUCTION_F1_WEIGHTED=0.70
-PRODUCTION_FEEDBACK_TREND_DROP_THRESHOLD=0.05
-PRODUCTION_FEEDBACK_MIN_HISTORY_POINTS=3
-```
-
-### 4. Prometheus alert rule/test 정리
-
-Production Feedback / Retraining Candidate alert에 maintenance mode 조건을 맞췄습니다.
-
-```text
-jobskill_alert_maintenance_mode == 0
-```
-
-Streamlit에서 확인해야 하는 model-quality 계열 alert의 `dashboard_url`은 아래로 정리했습니다.
-
-```text
-http://localhost:8501
-```
-
-추가/정리한 test:
-
-```text
-production_feedback_low_accuracy_should_fire
-production_feedback_low_accuracy_should_be_suppressed_during_maintenance
-production_feedback_low_f1_should_fire
-production_feedback_low_f1_should_be_suppressed_during_maintenance
-retraining_candidate_detected_should_fire
-retraining_candidate_should_be_suppressed_during_maintenance
-```
-
-### 5. Alert response metric 트러블슈팅
-
-로컬 smoke test에서 생성된 `SmokeTestAlert`가 오래된 firing 상태로 남으면 아래 alert를 유발할 수 있음을 확인했습니다.
-
-```text
-JobSkillUnacknowledgedCurrentAlert
-JobSkillHighAverageMTTA
-JobSkillHighAverageMTTR
-```
-
-확인 쿼리:
+## 검토자용 실행 명령
 
 ```bash
-docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
-SELECT
-    id,
-    alert_name,
-    service,
-    severity,
-    status,
-    starts_at,
-    last_received_at,
-    fingerprint,
-    ROUND(EXTRACT(EPOCH FROM (NOW() - starts_at)) / 60, 2) AS firing_minutes
-FROM alert_current_states
-WHERE status = 'firing'
-ORDER BY starts_at ASC;
-"
-```
-
-로컬 테스트 데이터 정리:
-
-```bash
-docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
-DELETE FROM alert_current_states
-WHERE fingerprint = 'smoke-test-fingerprint'
-   OR service = 'smoke-test'
-   OR alert_name = 'SmokeTestAlert';
-
-DELETE FROM alert_events
-WHERE fingerprint = 'smoke-test-fingerprint'
-   OR service = 'smoke-test'
-   OR alert_name = 'SmokeTestAlert';
-
-DELETE FROM alert_current_states
-WHERE alert_name IN (
-    'JobSkillUnacknowledgedCurrentAlert',
-    'JobSkillHighAverageMTTA',
-    'JobSkillHighAverageMTTR'
-);
-"
-```
-
-## 검증 명령어
-
-```bash
+make up
 make ops-static-check
-make production-feedback-sample
-make production-feedback-check
-make retraining-candidate-check
-make feedback-ops-dag-tasks
-make prometheus-check
-make prometheus-rule-test
-make alert-rule-metric-check
-make runbook-check
 make smoke
+make ops-check
+make ops-report
+make ops-evidence-bundle
 ```
 
-## 포트폴리오 관점 핵심 메시지
-
-이 프로젝트는 단순 ML 학습 코드가 아니라, 운영 중 모델 품질을 feedback 기반으로 다시 평가하고, 재학습 후보 판단까지 자동화하는 MLOps 운영 흐름을 구현합니다.
+## 산출물
 
 ```text
-배포 이후 예측
-→ 실제 feedback 수집
-→ 운영 성능 재평가
-→ 재학습 후보 판단
-→ metric/alert/runbook 연결
+reports/latest_ops_validation_report.md
+reports/ops_evidence/jobskill_ops_evidence_*.zip
+reports/latest_model_card.md
+reports/latest_incident_response_report.md
+docs/runbooks/*.md
 ```
-
-이 흐름이 오늘 작업으로 CLI, Dashboard, Airflow, Prometheus, Smoke Check까지 연결되었습니다.

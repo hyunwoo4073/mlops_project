@@ -30,6 +30,23 @@ docs/QUICKSTART.md
 ## 주요 업데이트 내역
 
 ```text
+2026-07-31
+- `Makefile`을 Build/Run, Database/Airflow, Pipeline DAG, Feedback Ops DAG, Quality/MLOps Validation, Alert/Incident Ops, Ops Validation, Reports/Model Ops, Apps, Monitoring, Alertmanager, Notification, Maintenance 카테고리로 재정리
+- `Makefile`의 `.PHONY`, help 출력, 실제 target 순서를 카테고리 기준으로 맞추고 `docker compose`, `airflow-scheduler`, `/opt/airflow/project` 하드코딩을 변수 기반으로 정리
+- `Makefile`에 `alert-webhook-lifecycle-check`, `synthetic-alert-plan`, `synthetic-alert-cleanup`, `synthetic-alert-check`, `ops-report`, `ops-evidence-bundle` target 추가
+- `scripts/check_static_ops_validation.sh`를 Required file presence, Core application modules, Quality/model operations, Alert/incident operations, Validation helper scripts, Airflow DAGs, Shell syntax, Compose/monitoring config, Documentation/metric dependency validation 순서로 재정리
+- static ops validation에 `scripts/manage_synthetic_alerts.py`, `scripts/check_alert_webhook_lifecycle.py`, `src/reporting/generate_ops_validation_report.py`, `scripts/create_ops_evidence_bundle.py` compile 검증 추가
+- `scripts/smoke_check.sh`를 Compose/Container Baseline, PostgreSQL/Project Schema, Airflow DAGs, Application Endpoints, API Prediction Path, Production Feedback/Retraining, Prometheus/Alertmanager, Dashboards 순서로 재정리
+- 기존 `SmokeTestAlert` firing-only webhook 검증을 제거하고 `scripts/check_alert_webhook_lifecycle.py` 기반 firing → resolved lifecycle 검증으로 교체
+- smoke check에 API 컨테이너의 PostgreSQL DNS resolution 검증과 synthetic alert residue check를 추가해 테스트 alert가 MTTA/MTTR 지표를 오염시키지 않도록 개선
+- `scripts/manage_synthetic_alerts.py` 추가로 smoke-test / incident-drill / SmokeTestAlert / SyntheticIncidentAlert 등 synthetic alert의 plan, cleanup, check 명령 제공
+- `scripts/check_alert_webhook_lifecycle.py` 추가로 Alertmanager webhook의 firing/resolved 저장, current state 전환, synthetic row cleanup을 검증
+- `scripts/check_ops_validation.sh`를 최상위 운영 검증 오케스트레이터로 재정리해 static validation, runtime baseline, DB/service discovery, Airflow health, endpoint, monitoring, dependency, alert lifecycle, smoke, repository hygiene를 순차 실행하도록 개선
+- `src/reporting/generate_ops_validation_report.py` 추가로 주요 테이블 row count, 최근 pipeline check, production feedback, retraining candidate, current firing alert, synthetic alert residue, model registry 상태를 Markdown 리포트로 생성
+- `generate_ops_validation_report.py`가 `model_registry`의 `model_version` 등 optional column 부재로 실패하지 않도록 information_schema 기반 동적 컬럼 감지 로직 적용
+- `scripts/create_ops_evidence_bundle.py` 추가로 README, QuickStart, Ops Validation Report, runbooks, Prometheus rule/test, metrics contract, Alertmanager config, Docker Compose, Makefile을 ZIP 증빙 패키지로 생성
+- `reports/latest_ops_validation_report.md`와 `reports/ops_evidence/jobskill_ops_evidence_*.zip` 기반으로 운영 검증 결과와 문서/설정/runbook을 포트폴리오 증빙 산출물로 남기는 흐름 추가
+
 2026-07-30
 - `src/quality/check_retraining_candidate.py` 기반 재학습 후보 판단을 CLI/Makefile/Smoke Check 검증 흐름에 연결
 - `Makefile`에 `retraining-candidate-check` target을 추가해 Airflow 컨테이너에서 재학습 후보 평가를 직접 실행하도록 개선
@@ -1192,6 +1209,270 @@ python scripts/send_sample_api_requests.py
 ```
 
 이 이슈는 로컬 컨테이너 재기동 과정에서 발생할 수 있는 stale connection 또는 Docker DNS 일시 문제로 볼 수 있습니다.
+
+
+## Local Ops Validation Command Structure
+
+운영 검증 명령어가 늘어나면서 Makefile, static validation, smoke check, ops check의 역할을 분리했습니다.
+
+```text
+make ops-static-check
+- 서비스 기동 전 정적 검증
+- Python compile
+- shell syntax
+- Prometheus rule syntax
+- Alertmanager config
+- runbook coverage
+- metric dependency static validation
+
+make smoke
+- 실제 서비스가 떠 있는 상태의 end-to-end smoke 검증
+- API health/readiness/model/metrics
+- API prediction request
+- production feedback 생성/평가
+- retraining candidate 평가
+- Prometheus / Alertmanager / Grafana / Dashboard endpoint
+- alert webhook lifecycle
+- synthetic alert residue check
+
+make ops-check
+- 최상위 운영 검증 오케스트레이터
+- static validation
+- runtime baseline
+- PostgreSQL / service discovery
+- Airflow DAG health
+- application endpoints
+- monitoring / alerting config
+- documentation / metric dependency checks
+- alert lifecycle hygiene
+- full smoke check
+- repository hygiene
+```
+
+### Makefile 카테고리
+
+`Makefile`은 아래 카테고리로 정리합니다.
+
+```text
+Build / Run
+Database / Airflow
+Pipeline DAG
+Feedback Ops DAG
+Quality / MLOps Validation
+Alert / Incident Ops
+Ops Validation
+Reports / Model Ops
+Apps
+Monitoring
+Alertmanager
+Notification
+Maintenance
+```
+
+이를 통해 포트폴리오 검토자나 운영자가 `make help`만 보고도 실행 가능한 운영 명령어를 목적별로 파악할 수 있습니다.
+
+## Synthetic Alert Hygiene
+
+Alertmanager webhook, smoke check, incident drill은 테스트 목적의 synthetic alert를 생성합니다. 이 alert가 `alert_current_states`에 firing 상태로 남으면 실제 운영 alert response metric을 오염시킬 수 있습니다.
+
+대표적인 연쇄 문제:
+
+```text
+SmokeTestAlert
+→ JobSkillUnacknowledgedCurrentAlert
+→ JobSkillHighAverageMTTA
+→ JobSkillHighAverageMTTR
+```
+
+이를 방지하기 위해 synthetic alert 정리 스크립트를 추가했습니다.
+
+```text
+scripts/manage_synthetic_alerts.py
+```
+
+지원 모드:
+
+```text
+--mode plan
+- 정리 대상 synthetic alert 확인
+
+--mode apply
+- synthetic alert current state와 event history 정리
+
+--mode check
+- synthetic alert 잔존 여부 검증
+```
+
+Makefile 명령어:
+
+```bash
+make synthetic-alert-plan
+make synthetic-alert-cleanup
+make synthetic-alert-check
+```
+
+정리 대상:
+
+```text
+service = smoke-test
+service = incident-drill
+alert_name = SmokeTestAlert
+alert_name = SyntheticIncidentAlert
+fingerprint = smoke-test-fingerprint
+alert_name ILIKE '%smoke%'
+alert_name ILIKE '%drill%'
+```
+
+`--include-derived` 옵션을 사용하면 synthetic alert로 인해 파생된 current state도 함께 정리합니다.
+
+```text
+JobSkillUnacknowledgedCurrentAlert
+JobSkillHighAverageMTTA
+JobSkillHighAverageMTTR
+```
+
+## Alert Webhook Lifecycle Smoke Check
+
+기존 smoke check는 Alertmanager webhook endpoint에 `SmokeTestAlert` firing payload만 전송했습니다. 이 방식은 webhook 저장 여부는 확인할 수 있지만 테스트 alert가 current state에 계속 firing으로 남는 문제가 있었습니다.
+
+개선 후에는 전용 lifecycle check를 사용합니다.
+
+```text
+scripts/check_alert_webhook_lifecycle.py
+```
+
+검증 흐름:
+
+```text
+1. synthetic alert firing 전송
+2. alert_current_states에 firing 저장 확인
+3. 같은 fingerprint로 resolved 전송
+4. alert_current_states에 resolved 반영 확인
+5. synthetic lifecycle row cleanup
+```
+
+실행:
+
+```bash
+make alert-webhook-lifecycle-check
+```
+
+컨테이너 내부 직접 실행:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+python scripts/check_alert_webhook_lifecycle.py
+"
+```
+
+이 개선으로 smoke check가 alert webhook 저장 경로를 검증하면서도 MTTA/MTTR 운영 metric을 오염시키지 않도록 했습니다.
+
+## Ops Validation Report
+
+운영 검증 결과를 Markdown 문서로 남기기 위해 Ops Validation Report 생성 기능을 추가했습니다.
+
+```text
+src/reporting/generate_ops_validation_report.py
+```
+
+생성 파일:
+
+```text
+reports/latest_ops_validation_report.md
+```
+
+포함 내용:
+
+```text
+생성 시각
+API / Prometheus / Alertmanager / Dashboard URL
+주요 테이블 row count
+최근 pipeline_check_results
+Production Feedback check 이력
+Retraining Candidate check 이력
+현재 firing alert
+synthetic alert residue
+최근 model_registry records
+추천 후속 검증 명령어
+```
+
+실행:
+
+```bash
+make ops-report
+```
+
+직접 실행:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+python src/reporting/generate_ops_validation_report.py
+"
+```
+
+`model_registry` 스키마는 프로젝트 진행 과정에서 컬럼명이 바뀔 수 있으므로, 리포트 스크립트는 `information_schema.columns`를 조회해 존재하는 컬럼만 선택합니다. 예를 들어 `model_version` 컬럼이 없으면 `model_run_id`, `run_id`, `mlflow_run_id` 등 사용 가능한 컬럼을 대체 표시합니다.
+
+## Ops Evidence Bundle
+
+운영 검증 결과와 문서/설정/runbook을 하나의 ZIP 파일로 묶는 증빙 패키지 생성 기능을 추가했습니다.
+
+```text
+scripts/create_ops_evidence_bundle.py
+```
+
+생성 위치:
+
+```text
+reports/ops_evidence/
+```
+
+생성 예시:
+
+```text
+reports/ops_evidence/jobskill_ops_evidence_YYYYMMDD_HHMMSS.zip
+```
+
+ZIP에 포함되는 주요 파일:
+
+```text
+README.md
+docs/README_SUMMARY.md
+docs/QUICKSTART.md
+docs/README_FULL.md
+reports/latest_ops_validation_report.md
+reports/latest_pipeline_report.md
+reports/latest_model_card.md
+reports/latest_incident_response_report.md
+docs/runbooks/*
+monitoring/metrics_contract.yml
+monitoring/prometheus/prometheus.yml
+monitoring/prometheus/rules/jobskill_alert_rules.yml
+monitoring/prometheus/tests/jobskill_alert_rules.test.yml
+monitoring/alertmanager/alertmanager.yml
+docker-compose.yml
+Makefile
+OPS_EVIDENCE_BUNDLE.md
+ops_evidence_manifest.json
+```
+
+실행:
+
+```bash
+make ops-evidence-bundle
+```
+
+권장 흐름:
+
+```bash
+make ops-check
+make ops-report
+make ops-evidence-bundle
+```
+
+이 기능을 통해 단순히 검증 명령어를 실행하는 수준을 넘어, 운영 검증 결과와 관련 문서/설정을 포트폴리오 또는 인수인계용 증빙 산출물로 남길 수 있습니다.
+
 
 
 ## 프로젝트 목표
