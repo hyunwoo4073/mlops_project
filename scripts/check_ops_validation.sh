@@ -168,7 +168,14 @@ check_command \
    grep -E 'show_feedback_ops_config|check_production_feedback|check_retraining_candidate'"
 
 # -----------------------------------------------------------------------------
-# 5. Application endpoints
+# 5. Retraining strategy checks
+# -----------------------------------------------------------------------------
+check_command \
+  "Retraining strategy check" \
+  "make retraining-strategy-check"
+
+# -----------------------------------------------------------------------------
+# 6. Application endpoints
 # -----------------------------------------------------------------------------
 check_http "FastAPI health" "${API_URL}/health"
 check_http "FastAPI readiness" "${API_URL}/ready"
@@ -178,7 +185,7 @@ check_http "MLflow UI" "http://localhost:5000"
 check_http "Streamlit Dashboard" "${DASHBOARD_URL}"
 
 # -----------------------------------------------------------------------------
-# 6. Monitoring / alerting config
+# 7. Monitoring / alerting config
 # -----------------------------------------------------------------------------
 check_command \
   "Prometheus config and alert rules" \
@@ -201,7 +208,7 @@ check_http "Alertmanager readiness" "${ALERTMANAGER_URL}/-/ready"
 check_http "Grafana health" "${GRAFANA_URL}/api/health"
 
 # -----------------------------------------------------------------------------
-# 7. Documentation / metric dependency checks
+# 8. Documentation / metric dependency checks
 # -----------------------------------------------------------------------------
 check_command \
   "Runbook coverage" \
@@ -216,7 +223,7 @@ check_command \
   "make alert-rule-metric-check"
 
 # -----------------------------------------------------------------------------
-# 8. Alert lifecycle hygiene
+# 9. Alert lifecycle hygiene
 # -----------------------------------------------------------------------------
 check_command \
   "Alert webhook lifecycle check" \
@@ -227,14 +234,14 @@ check_command \
   "make synthetic-alert-check"
 
 # -----------------------------------------------------------------------------
-# 9. Full smoke check
+# 10. Full smoke check
 # -----------------------------------------------------------------------------
 check_command \
   "Smoke check" \
   "make smoke"
 
 # -----------------------------------------------------------------------------
-# 10. Repository hygiene
+# 11. Repository hygiene
 # -----------------------------------------------------------------------------
 if [[ -x scripts/check_repository_artifacts.sh ]]; then
   check_command \

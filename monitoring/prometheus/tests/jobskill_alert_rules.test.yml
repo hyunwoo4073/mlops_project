@@ -406,3 +406,40 @@ tests:
       - eval_time: 6m
         alertname: JobSkillRetrainingCandidateDetected
         exp_alerts: []
+
+  - name: training_duration_high_should_fire
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '0+0x10'
+      - series: 'jobskill_training_duration_threshold_seconds'
+        values: '1800+0x10'
+      - series: 'jobskill_training_duration_seconds'
+        values: '2400+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillTrainingDurationHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: jobskill-training
+            exp_annotations:
+              summary: "JobSkill full retrain duration is high"
+              description: "Latest full retrain duration exceeded the configured threshold. Check the training cost report and retraining strategy report."
+              runbook_url: "http://localhost:8000/runbooks/jobskill_training_duration_high.md"
+              dashboard_url: "http://localhost:8501"
+              prometheus_url: "http://localhost:9090"
+
+  - name: training_duration_high_should_be_suppressed_during_maintenance
+    interval: 1m
+    input_series:
+      - series: 'jobskill_alert_maintenance_mode'
+        values: '1+0x10'
+      - series: 'jobskill_training_duration_threshold_seconds'
+        values: '1800+0x10'
+      - series: 'jobskill_training_duration_seconds'
+        values: '2400+0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JobSkillTrainingDurationHigh
+        exp_alerts: []

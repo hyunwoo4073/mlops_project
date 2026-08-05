@@ -1,92 +1,172 @@
 # jobskill-mlops Summary
 
-## 한 줄 요약
+## 프로젝트 개요
 
-채용공고 직무 분류 모델을 중심으로 데이터 적재, 학습, 검증, 배포, feedback 평가, 재학습 후보 판단, monitoring, alert, runbook, 운영 검증 산출물, CI evidence artifact, failure diagnostics까지 연결한 로컬 MLOps 포트폴리오 프로젝트입니다.
+`jobskill-mlops`는 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow/MLflow/FastAPI/Streamlit/Prometheus/Alertmanager/Grafana를 연결해 end-to-end MLOps 운영 흐름을 구성한 프로젝트입니다.
 
-## 핵심 가치
+## 핵심 아키텍처
 
 ```text
-단순 모델 학습 프로젝트가 아니라
-운영 가능한 MLOps 흐름과 CI 기반 검증/증빙 산출물까지 재현하는 프로젝트
+PostgreSQL
+- raw_job_posts
+- cleaned_job_posts
+- job_post_skills
+- model_predictions
+- prediction_feedbacks
+- pipeline_check_results
+- model_registry
+- alert_events
+- alert_current_states
+
+Airflow
+- jobskill_mlops_pipeline
+- jobskill_feedback_ops
+
+MLflow
+- training dataset tracking
+- evaluation artifact
+- model artifact
+- training cost metric
+
+FastAPI
+- /predict
+- /health
+- /ready
+- /metrics
+- /alertmanager/webhook
+- /runbooks
+
+Streamlit
+- model lifecycle
+- model evaluation
+- model card
+- production feedback
+- retraining candidate
+- alert history
+- incident report
+
+Prometheus / Alertmanager / Grafana
+- metrics contract
+- alert rule
+- rule test
+- runbook
+- Slack notification
 ```
 
-## 전체 흐름
+## 최근 개선: Retraining Strategy and Cost Benchmark
+
+2026-08-04 ~ 2026-08-05 작업으로 production feedback 기반 재학습 후보 판단 이후, 어떤 방식으로 재학습할지 판단하는 운영 계층을 추가했습니다.
 
 ```text
-Job Posting Data
-→ PostgreSQL
-→ Airflow
-→ Data Quality / Data Contract
-→ Model Training
-→ MLflow
-→ Model Promotion
-→ FastAPI / Batch Inference
-→ Production Feedback
+Production Feedback
 → Retraining Candidate
-→ Prometheus / Alertmanager
-→ Streamlit / Grafana
-→ Ops Check / Ops Report / Evidence Bundle
-→ GitHub Actions Artifact / Failure Diagnostics
+→ Retraining Strategy Check
+→ Training Cost Benchmark
+→ Training Cost Monitoring
+→ Training Data Selection Policy
 ```
 
-## 주요 구현 포인트
+추가된 주요 파일:
 
 ```text
-1. Airflow 기반 end-to-end ML pipeline
-2. MLflow 기반 학습 이력, artifact, model registry 관리
-3. Data Contract / Quality Gate / Class-level Performance Gate
-4. promoted model archive와 rollback CLI
-5. FastAPI serving과 prediction log 저장
-6. production feedback 기반 운영 성능 재평가
-7. retraining candidate 판단 자동화
-8. Prometheus metric과 alert rule 구성
-9. Alertmanager webhook, Slack alert, runbook 연결
-10. Streamlit/Grafana 운영 대시보드
-11. smoke/static/ops validation 자동화
-12. ops report와 evidence bundle 산출물 생성
-13. evidence bundle 내부 필수 파일 검증
-14. GitHub Actions artifact 기반 성공/실패 산출물 분리
+src/quality/check_retraining_strategy.py
+src/reporting/generate_retraining_strategy_report.py
+src/common/training_cost.py
+src/reporting/generate_training_cost_report.py
+src/training/training_data_selector.py
+docs/runbooks/jobskill_training_duration_high.md
 ```
 
-## 2026-08-03 개선 요약
+추가된 Makefile target:
 
 ```text
-Ops Evidence Bundle Validation
-- 생성된 evidence ZIP 내부 README, QuickStart, ops report, manifest, runbook 포함 여부 검증
-
-CI Ops Evidence Artifact
-- smoke workflow 성공 후 ops evidence bundle 생성/검증
-- GitHub Actions artifact로 jobskill-ops-evidence 업로드
-
-CI Failure Diagnostics
-- CI 실패 시 compose 상태, 서비스 로그, DB 상태, alert 상태, endpoint 응답 수집
-- GitHub Actions artifact로 jobskill-ci-diagnostics 업로드
-
-Compatibility Fix
-- Python 3.11 기준 generate_ops_validation_report.py f-string syntax 오류 수정
+retraining-strategy-check
+retraining-strategy-report
+training-cost-report
 ```
 
-## 검토자용 실행 명령
+추가된 report:
+
+```text
+reports/latest_retraining_strategy_report.md
+reports/latest_training_cost_report.md
+```
+
+추가된 check_type:
+
+```text
+RETRAINING_STRATEGY
+TRAINING_COST
+```
+
+추가된 주요 metric:
+
+```text
+jobskill_training_duration_seconds
+jobskill_training_duration_threshold_seconds
+jobskill_training_rows
+jobskill_training_category_count
+jobskill_training_throughput_rows_per_second
+jobskill_training_model_size_bytes
+jobskill_training_incremental_experiment_by_duration
+```
+
+추가된 alert:
+
+```text
+JobSkillTrainingDurationHigh
+```
+
+## 운영 검증 명령어
 
 ```bash
-make up
 make ops-static-check
-make smoke
 make ops-check
+make smoke
+make metrics-contract-check
+make prometheus-check
+make prometheus-rule-test
+make runbook-check
+make alert-rule-metric-check
+```
+
+## 재학습 전략 검증 명령어
+
+```bash
+make production-feedback-check
+make retraining-candidate-check
+make retraining-strategy-check
+make retraining-strategy-report
+make training-cost-report
+```
+
+## Evidence Bundle
+
+운영 검증 결과는 evidence bundle로 묶습니다.
+
+```bash
 make ops-report
+make retraining-strategy-report
+make training-cost-report
 make ops-evidence-bundle
 make ops-evidence-check
 ```
 
-## CI 산출물
+포함되는 주요 파일:
 
 ```text
-jobskill-ops-evidence
-- 성공 시 업로드
-- 운영 검증 report와 evidence bundle 포함
-
-jobskill-ci-diagnostics
-- 실패 시 업로드
-- 서비스 로그, DB 상태, alert 상태, HTTP endpoint 응답 포함
+README.md
+docs/README_SUMMARY.md
+docs/QUICKSTART.md
+docs/README_FULL.md
+reports/latest_ops_validation_report.md
+reports/latest_retraining_strategy_report.md
+reports/latest_training_cost_report.md
+docs/runbooks/*
+monitoring/metrics_contract.yml
+monitoring/prometheus/rules/jobskill_alert_rules.yml
+monitoring/prometheus/tests/jobskill_alert_rules.test.yml
+monitoring/alertmanager/alertmanager.yml
+docker-compose.yml
+Makefile
 ```

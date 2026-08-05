@@ -544,6 +544,30 @@ def build_metrics_text() -> str:
             )
         ).mappings().all()
 
+        training_cost_check_rows = conn.execute(
+            text(
+                """
+                SELECT DISTINCT ON (check_name)
+                    check_name,
+                    status,
+                    metric_value,
+                    threshold_value,
+                    checked_at
+                FROM pipeline_check_results
+                WHERE check_type = 'TRAINING_COST'
+                  AND check_name IN (
+                      'training_duration_seconds',
+                      'training_rows',
+                      'training_category_count',
+                      'training_throughput_rows_per_second',
+                      'model_size_bytes',
+                      'incremental_experiment_by_duration'
+                  )
+                ORDER BY check_name, checked_at DESC
+                """
+            )
+        ).mappings().all()
+
     production_feedback_latest_metrics = {
         row["check_name"]: _float_or_zero(row["metric_value"])
         for row in production_feedback_latest_metric_rows
@@ -573,6 +597,31 @@ def build_metrics_text() -> str:
         1
         if retraining_candidate_flag_value >= 1
         or retraining_candidate_flag_status == "FAIL"
+        else 0
+    )
+
+    training_cost_latest_metrics = {
+        row["check_name"]: _float_or_zero(row["metric_value"])
+        for row in training_cost_check_rows
+    }
+
+    training_cost_latest_thresholds = {
+        row["check_name"]: _float_or_zero(row["threshold_value"])
+        for row in training_cost_check_rows
+    }
+
+    training_cost_latest_statuses = {
+        row["check_name"]: str(row["status"] or "UNKNOWN")
+        for row in training_cost_check_rows
+    }
+
+    jobskill_training_incremental_experiment_by_duration = (
+        1
+        if training_cost_latest_statuses.get(
+            "incremental_experiment_by_duration",
+            "UNKNOWN",
+        )
+        == "WARN"
         else 0
     )
 
@@ -813,7 +862,7 @@ def build_metrics_text() -> str:
                 "check_type": row["check_type"],
                 "status": row["status"],
             },
-            row["cnt"],
+            int(row["count"] or 0),
         )
         for row in recent_failed_check_rows
     ]
@@ -996,6 +1045,118 @@ def build_metrics_text() -> str:
                     "retraining_f1_delta",
                     0.0,
                 ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_duration_seconds",
+        metric_type="gauge",
+        help_text="Latest baseline model training duration in seconds.",
+        values=[
+            (
+                {},
+                training_cost_latest_metrics.get(
+                    "training_duration_seconds",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_duration_threshold_seconds",
+        metric_type="gauge",
+        help_text="Configured maximum acceptable full retrain duration in seconds.",
+        values=[
+            (
+                {},
+                training_cost_latest_thresholds.get(
+                    "training_duration_seconds",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_rows",
+        metric_type="gauge",
+        help_text="Latest number of rows used for baseline model training.",
+        values=[
+            (
+                {},
+                training_cost_latest_metrics.get(
+                    "training_rows",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_category_count",
+        metric_type="gauge",
+        help_text="Latest number of categories used for baseline model training.",
+        values=[
+            (
+                {},
+                training_cost_latest_metrics.get(
+                    "training_category_count",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_throughput_rows_per_second",
+        metric_type="gauge",
+        help_text="Latest baseline training throughput in rows per second.",
+        values=[
+            (
+                {},
+                training_cost_latest_metrics.get(
+                    "training_throughput_rows_per_second",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_model_size_bytes",
+        metric_type="gauge",
+        help_text="Latest serialized baseline model artifact size in bytes.",
+        values=[
+            (
+                {},
+                training_cost_latest_metrics.get(
+                    "model_size_bytes",
+                    0.0,
+                ),
+            )
+        ],
+    )
+
+    _add_metric(
+        lines=lines,
+        name="jobskill_training_incremental_experiment_by_duration",
+        metric_type="gauge",
+        help_text=(
+            "Whether training duration indicates that an incremental retraining "
+            "shadow experiment should be considered. 1 means recommended."
+        ),
+        values=[
+            (
+                {},
+                jobskill_training_incremental_experiment_by_duration,
             )
         ],
     )

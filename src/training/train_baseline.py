@@ -16,6 +16,18 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
+from src.common.training_cost import (
+    TrainingCostTimer,
+    log_training_cost_to_mlflow,
+    record_training_cost_snapshot,
+)
+from src.training.training_data_selector import (
+    build_training_query,
+    load_training_data_selection_config,
+    log_training_data_selection_to_mlflow,
+    print_training_data_selection_result,
+    select_training_data,
+)
 
 # 프로젝트 루트를 import path에 추가
 sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -255,22 +267,11 @@ def log_model_evaluation_artifacts_to_mlflow(y_test, preds) -> None:
         )
 
 def main():
+    training_cost_timer = TrainingCostTimer()
+
     engine = get_engine()
 
-    query = """
-        SELECT
-            c.id,
-            c.raw_id,
-            COALESCE(r.source, 'unknown') AS source,
-            c.text_for_model,
-            c.job_category
-        FROM cleaned_job_posts c
-        LEFT JOIN raw_job_posts r
-        ON c.raw_id = r.id
-        WHERE c.job_category IS NOT NULL
-        AND c.job_category != 'Unknown'
-        AND c.text_for_model IS NOT NULL
-    """
+    query = build_training_query(engine)
 
     df = pd.read_sql(query, engine)
 
@@ -279,6 +280,22 @@ def main():
 
     if len(df) < 5:
         raise ValueError("Training data is too small.")
+
+    training_data_selection_config = load_training_data_selection_config()
+    training_data_selection_result = select_training_data(
+        df,
+        training_data_selection_config,
+    )
+    print_training_data_selection_result(training_data_selection_result)
+    df = training_data_selection_result.df
+
+    if df.empty:
+        raise ValueError("No training data left after training data selection.")
+
+    if len(df) < 5:
+        raise ValueError(
+            f"Training data is too small after data selection. rows={len(df)}"
+        )
 
     print("Training data count before filtering:", len(df))
     print()
@@ -390,8 +407,12 @@ def main():
 
     mlflow.set_experiment(experiment_name)
 
-    with mlflow.start_run():
+    with mlflow.start_run() as run:
         log_training_dataset_to_mlflow(df)
+        log_training_data_selection_to_mlflow(
+            training_data_selection_result,
+            mlflow_module=mlflow,
+        )
 
         model.fit(X_train, y_train)
 
@@ -429,7 +450,30 @@ def main():
         os.makedirs("models", exist_ok=True)
         joblib.dump(model, MODEL_PATH)
 
+        snapshot = training_cost_timer.finish(
+            training_rows=len(df),
+            category_count=num_classes,
+            model_path=MODEL_PATH,
+            mlflow_run_id=run.info.run_id,
+        )
+
+        log_training_cost_to_mlflow(
+            snapshot,
+            mlflow_module=mlflow,
+        )
+
+        record_training_cost_snapshot(
+            snapshot,
+            dag_id="jobskill_mlops_pipeline",
+            task_id="train_baseline",
+            run_id=run.info.run_id,
+        )
+
         print(f"Saved model: {MODEL_PATH}")
+        print(f"training_duration_seconds: {snapshot.duration_seconds:.4f}")
+        print(f"training_rows: {snapshot.training_rows}")
+        print(f"training_category_count: {snapshot.category_count}")
+        print(f"model_size_bytes: {snapshot.model_size_bytes}")
 
 
 if __name__ == "__main__":

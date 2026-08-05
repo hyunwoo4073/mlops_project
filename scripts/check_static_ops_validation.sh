@@ -121,6 +121,22 @@ check_python_compile \
   "Compile retraining candidate check" \
   src/quality/check_retraining_candidate.py
 
+check_python_compile \
+  "Compile retraining strategy check" \
+  src/quality/check_retraining_strategy.py
+
+check_python_compile \
+  "Compile training cost report" \
+  src/reporting/generate_training_cost_report.py
+
+check_python_compile \
+  "Compile training data selector" \
+  src/training/training_data_selector.py
+
+check_python_compile \
+  "Compile ops evidence bundle creator" \
+  scripts/create_ops_evidence_bundle.py
+
 check_optional_python_compile \
   "Compile data contract check" \
   src/quality/check_data_contract.py
@@ -147,6 +163,10 @@ check_python_compile \
 check_python_compile \
   "Compile ops validation report" \
   src/reporting/generate_ops_validation_report.py
+
+check_python_compile \
+  "Compile retraining strategy report" \
+  src/reporting/generate_retraining_strategy_report.py
 
 check_python_compile \
   "Compile ops evidence bundle creator" \

@@ -253,3 +253,19 @@ groups:
           runbook_url: "http://localhost:8000/runbooks/jobskill_retraining_candidate_detected.md"
           dashboard_url: "http://localhost:8501"
           prometheus_url: "http://localhost:9090/graph?g0.expr=jobskill_retraining_candidate_flag"
+
+      - alert: JobSkillTrainingDurationHigh
+        expr: |
+          jobskill_alert_maintenance_mode == 0
+          and jobskill_training_duration_threshold_seconds > 0
+          and jobskill_training_duration_seconds > jobskill_training_duration_threshold_seconds
+        for: 5m
+        labels:
+          severity: warning
+          service: jobskill-training
+        annotations:
+          summary: "JobSkill full retrain duration is high"
+          description: "Latest full retrain duration exceeded the configured threshold. Check the training cost report and retraining strategy report."
+          runbook_url: "http://localhost:8000/runbooks/jobskill_training_duration_high.md"
+          dashboard_url: "http://localhost:8501"
+          prometheus_url: "http://localhost:9090"

@@ -25,6 +25,8 @@ OPTIONAL_PATHS = [
     Path("reports/latest_pipeline_report.md"),
     Path("reports/latest_model_card.md"),
     Path("reports/latest_incident_response_report.md"),
+    Path("reports/latest_retraining_strategy_report.md"),
+    Path("reports/latest_training_cost_report.md"),
     Path("monitoring/metrics_contract.yml"),
     Path("monitoring/prometheus/prometheus.yml"),
     Path("monitoring/prometheus/rules/jobskill_alert_rules.yml"),

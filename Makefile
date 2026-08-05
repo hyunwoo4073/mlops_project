@@ -38,12 +38,12 @@ ALL_RUNTIME_SERVICES := $(AIRFLOW_SERVICES) $(APP_SERVICES)
 	feedback-ops-dag-tasks feedback-ops-dag-info feedback-ops-dag-trigger \
 	lint test test-container ci \
 	smoke data-contract-check model-class-performance-check drift-check \
-	production-feedback-sample production-feedback-check retraining-candidate-check \
+	production-feedback-sample production-feedback-check retraining-candidate-check retraining-strategy-check training-cost-report \
 	alert-webhook-lifecycle-check synthetic-alert-plan synthetic-alert-cleanup synthetic-alert-check \
 	alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check \
 	ops-static-check ops-check repo-artifact-check compose-config-check ci-diagnostics \
 	report incident-report incident-drill ops-report ops-evidence-bundle ops-evidence-check ops-evidence-ci \
-	model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check \
+	model-archive model-card model-card-check model-rollback-plan model-rollback model-lifecycle-check retraining-strategy-report \
 	notify notification-check notification-test-alert notification-resolve-alert \
 	dashboard dashboard-logs api api-logs api-sample mlflow mlflow-logs \
 	metrics prometheus prometheus-logs prometheus-check prometheus-rule-test prometheus-external-target-check \
@@ -91,6 +91,7 @@ help:
 	@echo "  make production-feedback-sample             Create sample feedback from recent predictions"
 	@echo "  make production-feedback-check              Evaluate production feedback performance"
 	@echo "  make retraining-candidate-check             Evaluate and persist retraining candidate decision"
+	@echo "  make retraining-strategy-check             Evaluate retraining data strategy and policy"
 	@echo ""
 	@echo "Alert / Incident Ops"
 	@echo "  make alert-webhook-lifecycle-check          Validate firing/resolved alert webhook lifecycle"
@@ -123,6 +124,8 @@ help:
 	@echo "  make model-rollback-plan                    Show promoted model rollback plan"
 	@echo "  make model-rollback                         Roll back to archived promoted model"
 	@echo "  make model-lifecycle-check                  Validate model registry, archive and rollback integrity"
+	@echo "  make retraining-strategy-report             Generate retraining strategy report"
+	@echo "  make training-cost-report                  Generate training cost benchmark report"
 	@echo ""
 	@echo "Apps"
 	@echo "  make dashboard                              Start Streamlit dashboard"
@@ -264,6 +267,9 @@ production-feedback-check:
 retraining-candidate-check:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_retraining_candidate.py"
 
+retraining-strategy-check:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_retraining_strategy.py"
+
 # -----------------------------------------------------------------------------
 # Alert / Incident Ops
 # -----------------------------------------------------------------------------
@@ -330,7 +336,7 @@ ops-evidence-bundle:
 ops-evidence-check:
 	python scripts/check_ops_evidence_bundle.py
 
-ops-evidence-ci: ops-report ops-evidence-bundle ops-evidence-check
+ops-evidence-ci: ops-report retraining-strategy-report training-cost-report ops-evidence-bundle ops-evidence-check
 	@echo "Ops evidence bundle generated and validated"
 
 model-archive:
@@ -362,6 +368,12 @@ model-rollback:
 
 model-lifecycle-check:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/check_model_lifecycle_integrity.py"
+
+retraining-strategy-report:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_retraining_strategy_report.py"
+
+training-cost-report:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_training_cost_report.py"
 
 # -----------------------------------------------------------------------------
 # Apps

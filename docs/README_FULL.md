@@ -30,6 +30,36 @@ docs/QUICKSTART.md
 ## 주요 업데이트 내역
 
 ```text
+2026-08-04 ~ 2026-08-05
+- Retraining Strategy and Cost Benchmark 흐름 추가
+- `src/quality/check_retraining_strategy.py` 추가로 `cleaned_job_posts` row 수, 최근 window row 수, category별 row 수, class imbalance, production feedback row 수를 기반으로 재학습 전략을 판단하도록 개선
+- `pipeline_check_results`에 `RETRAINING_STRATEGY` check_type을 저장하고 `training_total_rows`, `training_lookback_rows`, `training_recent_window_rows`, `training_category_count`, `training_category_min_rows`, `training_category_imbalance_ratio`, `training_feedback_rows`, `full_retrain_row_policy`, `window_retrain_policy`, `sampling_retrain_recommended`, `incremental_experiment_recommended` 결과를 남기도록 구성
+- `src/reporting/generate_retraining_strategy_report.py` 추가로 `reports/latest_retraining_strategy_report.md` 생성 기능 추가
+- `Makefile`에 `retraining-strategy-check`, `retraining-strategy-report` target 추가
+- `scripts/check_ops_validation.sh`의 Airflow DAG health 이후 단계에 `Retraining strategy check`를 추가해 운영 검증 흐름에서 재학습 전략 판단을 함께 확인하도록 개선
+- `.env.example`과 `docker-compose.yml`에 `RETRAINING_LOOKBACK_DAYS`, `RETRAINING_RECENT_DAYS`, `RETRAINING_MAX_FULL_RETRAIN_ROWS`, `RETRAINING_MAX_FULL_RETRAIN_SECONDS`, `RETRAINING_MIN_WINDOW_ROWS`, `RETRAINING_MIN_ROWS_PER_CLASS`, `RETRAINING_FEEDBACK_REQUIRED`, `RETRAINING_FEEDBACK_LOOKBACK_DAYS`, `RETRAINING_INCREMENTAL_EXPERIMENT_ROW_THRESHOLD`, `RETRAINING_INCREMENTAL_EXPERIMENT_SECONDS_THRESHOLD` 환경변수 추가
+- `src/common/training_cost.py` 추가로 baseline model 학습 시간, 학습 row 수, category 수, throughput, model artifact 크기를 측정하고 MLflow 및 `pipeline_check_results`에 저장하도록 구성
+- `src/training/train_baseline.py`에 `TrainingCostTimer`, `log_training_cost_to_mlflow`, `record_training_cost_snapshot` 호출을 연결해 학습 종료 후 `TRAINING_COST` 결과를 저장하도록 개선
+- `src/reporting/generate_training_cost_report.py` 추가로 `reports/latest_training_cost_report.md` 생성 기능 추가
+- `Makefile`에 `training-cost-report` target 추가
+- `ops-evidence-ci` 흐름에 `retraining-strategy-report`, `training-cost-report`를 포함해 evidence bundle 생성 전에 재학습 전략/학습 비용 리포트를 함께 생성하도록 개선
+- `scripts/create_ops_evidence_bundle.py`에 `reports/latest_retraining_strategy_report.md`, `reports/latest_training_cost_report.md`를 포함하도록 개선
+- FastAPI `/metrics`에 training cost metric 노출 추가
+- `/metrics`에 `jobskill_training_duration_seconds`, `jobskill_training_duration_threshold_seconds`, `jobskill_training_rows`, `jobskill_training_category_count`, `jobskill_training_throughput_rows_per_second`, `jobskill_training_model_size_bytes`, `jobskill_training_incremental_experiment_by_duration` 추가
+- `monitoring/metrics_contract.yml`에 training cost metric contract 추가
+- `JobSkillTrainingDurationHigh` Prometheus alert rule 추가
+- `docs/runbooks/jobskill_training_duration_high.md` 추가로 full retrain duration 증가 대응 절차 문서화
+- Prometheus rule test에 `training_duration_high_should_fire`, `training_duration_high_should_be_suppressed_during_maintenance` 케이스 추가
+- `runbook_url`은 `runbook-check` 규칙에 맞춰 `.md`로 끝나도록 정리
+- `src/training/training_data_selector.py` 추가로 학습 데이터 선택 정책을 분리
+- `TRAINING_DATA_MODE=full|lookback|recent|recent_plus_history_sample` 기반으로 전체 학습, lookback window 학습, recent window 학습, recent + historical class-balanced sample 학습을 선택할 수 있도록 개선
+- `train_baseline.py`의 고정 SQL 조회를 `build_training_query(engine)` 기반으로 전환하고, `training_event_at` 기준 데이터 선택 정책을 적용하도록 개선
+- Training Data Selection 결과를 MLflow param, metric, `training_data_selection.json` artifact로 기록하도록 구성
+- `TRAINING_DATA_MODE` 기본값은 `full`로 유지해 현재 baseline full retrain 운영 방식을 유지하면서, 필요 시 window/sampling 실험을 수행할 수 있도록 구성
+- `scripts/check_static_ops_validation.sh`에 `src/common/training_cost.py`, `src/training/training_data_selector.py`, `src/reporting/generate_training_cost_report.py`, `src/reporting/generate_retraining_strategy_report.py` compile 검증 추가
+- `src/monitoring/prometheus_metrics.py`에서 `recent_failed_check_rows`는 `COUNT(*) AS count` alias를 사용하므로 `row["cnt"]` 접근을 `row["count"]`로 수정해 FastAPI `/metrics`의 `NoSuchColumnError`를 해결
+
+
 2026-08-03
 - `scripts/check_ops_evidence_bundle.py` 추가로 `reports/ops_evidence/jobskill_ops_evidence_*.zip` 내부 필수 산출물 검증 기능 추가
 - `Makefile`에 `ops-evidence-check` target을 추가해 README, QuickStart, Ops Validation Report, manifest, runbook 포함 여부를 검증하도록 개선
@@ -1459,6 +1489,8 @@ docs/README_SUMMARY.md
 docs/QUICKSTART.md
 docs/README_FULL.md
 reports/latest_ops_validation_report.md
+reports/latest_retraining_strategy_report.md
+reports/latest_training_cost_report.md
 reports/latest_pipeline_report.md
 reports/latest_model_card.md
 reports/latest_incident_response_report.md
@@ -1726,6 +1758,410 @@ Checkout
 이 구조를 통해 CI는 단순 성공/실패만 보여주는 것이 아니라, 성공 시 운영 증빙을 남기고 실패 시 진단 자료를 남기는 형태로 확장됩니다.
 
 
+
+## Retraining Strategy and Cost Benchmark
+
+Retraining Strategy and Cost Benchmark는 production feedback 기반 재학습 후보 판단 이후, 실제로 어떤 방식으로 재학습할지 결정하기 위한 운영 판단 계층입니다.
+
+기존 흐름은 아래처럼 재학습 후보 감지 이후 전체 재학습을 전제로 했습니다.
+
+```text
+Production Feedback
+→ Retraining Candidate
+→ full retrain
+```
+
+이번 개선 이후에는 아래처럼 재학습 전략 판단과 비용 측정을 분리합니다.
+
+```text
+Production Feedback
+→ Retraining Candidate
+→ Retraining Strategy Check
+→ Training Cost Benchmark
+→ Retraining Strategy Report
+→ Training Cost Report
+→ Ops Evidence Bundle
+```
+
+### Retraining Strategy Check
+
+구성 파일:
+
+```text
+src/quality/check_retraining_strategy.py
+```
+
+실행:
+
+```bash
+make retraining-strategy-check
+```
+
+내부 실행:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "cd /opt/airflow/project && python src/quality/check_retraining_strategy.py"
+```
+
+확인하는 항목:
+
+```text
+전체 학습 후보 row 수
+lookback window row 수
+recent window row 수
+category 수
+category별 최소 row 수
+category imbalance ratio
+production feedback row 수
+full retrain row 기준 허용 여부
+window retrain 가능 여부
+sampling retrain 추천 여부
+incremental shadow experiment 필요 여부
+```
+
+저장 위치:
+
+```text
+pipeline_check_results
+```
+
+저장되는 `check_type`:
+
+```text
+RETRAINING_STRATEGY
+```
+
+저장되는 주요 `check_name`:
+
+```text
+training_total_rows
+training_lookback_rows
+training_recent_window_rows
+training_category_count
+training_category_min_rows
+training_category_imbalance_ratio
+training_feedback_rows
+full_retrain_row_policy
+window_retrain_policy
+sampling_retrain_recommended
+incremental_experiment_recommended
+```
+
+DB 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    message,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type = 'RETRAINING_STRATEGY'
+ORDER BY checked_at DESC, check_name
+LIMIT 30;
+"
+```
+
+### Retraining Strategy Report
+
+구성 파일:
+
+```text
+src/reporting/generate_retraining_strategy_report.py
+```
+
+생성 파일:
+
+```text
+reports/latest_retraining_strategy_report.md
+```
+
+실행:
+
+```bash
+make retraining-strategy-report
+cat reports/latest_retraining_strategy_report.md
+```
+
+포함 내용:
+
+```text
+full retrain 유지 가능 여부
+window retrain 가능 여부
+sampling retrain 추천 여부
+incremental shadow experiment 추천 여부
+학습 데이터 table profile
+category distribution
+source distribution
+최신 RETRAINING_STRATEGY check 결과
+후속 검증 명령어
+```
+
+### Training Cost Benchmark
+
+Training Cost Benchmark는 baseline model 학습 시 실제 비용을 측정해 full retrain이 언제까지 현실적인지 판단하기 위한 기능입니다.
+
+구성 파일:
+
+```text
+src/common/training_cost.py
+src/training/train_baseline.py
+src/reporting/generate_training_cost_report.py
+```
+
+`train_baseline.py`는 학습이 끝난 뒤 아래 값을 MLflow와 `pipeline_check_results`에 기록합니다.
+
+```text
+training_duration_seconds
+training_rows
+training_category_count
+training_throughput_rows_per_second
+model_size_bytes
+incremental_experiment_by_duration
+```
+
+저장되는 `check_type`:
+
+```text
+TRAINING_COST
+```
+
+DB 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    message,
+    run_id,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type = 'TRAINING_COST'
+ORDER BY checked_at DESC, check_name
+LIMIT 30;
+"
+```
+
+### Training Cost Report
+
+구성 파일:
+
+```text
+src/reporting/generate_training_cost_report.py
+```
+
+생성 파일:
+
+```text
+reports/latest_training_cost_report.md
+```
+
+실행:
+
+```bash
+make training-cost-report
+cat reports/latest_training_cost_report.md
+```
+
+포함 내용:
+
+```text
+최신 training duration
+최신 training rows
+최신 training throughput
+model artifact size
+incremental experiment by duration 판단
+최근 training cost history
+관련 retraining strategy signal
+```
+
+### 관련 환경변수
+
+```env
+RETRAINING_LOOKBACK_DAYS=180
+RETRAINING_RECENT_DAYS=90
+RETRAINING_MAX_FULL_RETRAIN_ROWS=100000
+RETRAINING_MAX_FULL_RETRAIN_SECONDS=1800
+RETRAINING_MIN_WINDOW_ROWS=1000
+RETRAINING_MIN_ROWS_PER_CLASS=100
+RETRAINING_FEEDBACK_REQUIRED=false
+RETRAINING_FEEDBACK_LOOKBACK_DAYS=90
+RETRAINING_INCREMENTAL_EXPERIMENT_ROW_THRESHOLD=500000
+RETRAINING_INCREMENTAL_EXPERIMENT_SECONDS_THRESHOLD=3600
+```
+
+### 권장 실행 흐름
+
+```bash
+make retraining-strategy-check
+make retraining-strategy-report
+make training-cost-report
+make ops-report
+make ops-evidence-bundle
+make ops-evidence-check
+```
+
+## Training Cost Monitoring and Alerting
+
+Training Cost Monitoring은 `TRAINING_COST` 결과를 FastAPI `/metrics`로 노출하고, Prometheus alert rule과 runbook으로 연결하는 운영 감시 기능입니다.
+
+```text
+TRAINING_COST 저장
+→ FastAPI /metrics 노출
+→ metrics contract 검증
+→ Prometheus alert rule 평가
+→ runbook 기반 대응
+```
+
+### Training Cost Metrics
+
+FastAPI `/metrics`에서 아래 metric을 노출합니다.
+
+```text
+jobskill_training_duration_seconds
+jobskill_training_duration_threshold_seconds
+jobskill_training_rows
+jobskill_training_category_count
+jobskill_training_throughput_rows_per_second
+jobskill_training_model_size_bytes
+jobskill_training_incremental_experiment_by_duration
+```
+
+확인:
+
+```bash
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_training_"
+```
+
+### Training Duration Alert
+
+Prometheus alert:
+
+```text
+JobSkillTrainingDurationHigh
+```
+
+Alert 조건:
+
+```text
+jobskill_alert_maintenance_mode == 0
+and
+jobskill_training_duration_threshold_seconds > 0
+and
+jobskill_training_duration_seconds > jobskill_training_duration_threshold_seconds
+```
+
+연결 runbook:
+
+```text
+docs/runbooks/jobskill_training_duration_high.md
+```
+
+검증:
+
+```bash
+make metrics-contract-check
+make prometheus-check
+make prometheus-rule-test
+make runbook-check
+make alert-rule-metric-check
+```
+
+## Training Data Selection Policy
+
+Training Data Selection Policy는 학습 데이터가 증가했을 때 항상 전체 데이터를 학습하지 않고, 설정에 따라 window 또는 sampling 기반 학습을 실험할 수 있도록 하는 기능입니다.
+
+기본값은 `full`입니다. 따라서 현재 baseline full retrain 운영 방식은 유지하면서, 필요할 때만 실험 모드를 사용할 수 있습니다.
+
+구성 파일:
+
+```text
+src/training/training_data_selector.py
+src/training/train_baseline.py
+```
+
+지원 모드:
+
+```text
+TRAINING_DATA_MODE=full
+- cleaned_job_posts 전체를 학습 데이터로 사용
+
+TRAINING_DATA_MODE=lookback
+- TRAINING_LOOKBACK_DAYS 기준 최근 데이터만 사용
+
+TRAINING_DATA_MODE=recent
+- TRAINING_RECENT_DAYS 기준 최근 데이터만 사용
+
+TRAINING_DATA_MODE=recent_plus_history_sample
+- 최근 데이터 전체와 과거 데이터의 class별 sample을 함께 사용
+```
+
+관련 환경변수:
+
+```env
+TRAINING_DATA_MODE=full
+TRAINING_DATE_COLUMN=training_event_at
+TRAINING_LOOKBACK_DAYS=180
+TRAINING_RECENT_DAYS=90
+TRAINING_HISTORY_SAMPLE_ROWS_PER_CLASS=100
+TRAINING_RANDOM_STATE=42
+TRAINING_MIN_ROWS_AFTER_SELECTION=5
+```
+
+학습 실행 예시:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=full python src/training/train_baseline.py
+"
+```
+
+recent window 실험:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=recent \
+TRAINING_RECENT_DAYS=90 \
+python src/training/train_baseline.py
+"
+```
+
+recent + historical sample 실험:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=recent_plus_history_sample \
+TRAINING_RECENT_DAYS=90 \
+TRAINING_HISTORY_SAMPLE_ROWS_PER_CLASS=50 \
+python src/training/train_baseline.py
+"
+```
+
+MLflow에 기록되는 항목:
+
+```text
+training_data_requested_mode
+training_data_applied_mode
+training_data_date_column
+training_data_before_selection_rows
+training_data_after_selection_rows
+training_data_recent_rows
+training_data_historical_rows
+training_data_selection.json
+```
+
+이 기능을 통해 full retrain, recent retrain, recent + historical sample retrain의 비용과 성능을 MLflow 및 report 기준으로 비교할 수 있습니다.
 
 ## 프로젝트 목표
 
