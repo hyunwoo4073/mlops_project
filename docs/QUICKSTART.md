@@ -1,80 +1,166 @@
-# JobSkill MLOps Quick Start
+# jobskill-mlops Quick Start
 
 ## 1. 서비스 기동
 
 ```bash
-make build
 make up
 ```
 
-## 2. DB 테이블 생성
+상태 확인:
 
 ```bash
-make create-tables
+docker compose ps
 ```
 
-## 3. 기본 검증
+## 2. 기본 smoke check
 
 ```bash
-make ops-static-check
 make smoke
 ```
 
-## 4. 운영 검증 전체 실행
+## 3. 운영 정적 검증
+
+```bash
+make ops-static-check
+```
+
+## 4. 전체 운영 검증
 
 ```bash
 make ops-check
 ```
 
-## 5. Production Feedback / Retraining
+## 5. Production Feedback / Retraining Candidate
+
+샘플 feedback 생성:
 
 ```bash
 make production-feedback-sample
+```
+
+Production feedback 평가:
+
+```bash
 make production-feedback-check
+```
+
+재학습 후보 판단:
+
+```bash
 make retraining-candidate-check
 ```
 
-metric 확인:
+## 6. Retraining Strategy and Cost Benchmark
+
+재학습 전략 판단:
 
 ```bash
-curl -fsS http://localhost:8000/metrics | grep -E "jobskill_production_feedback|jobskill_retraining_candidate"
+make retraining-strategy-check
 ```
 
-## 6. Alert Lifecycle / Synthetic Alert 정리
+재학습 전략 리포트 생성:
 
 ```bash
-make alert-webhook-lifecycle-check
-make synthetic-alert-plan
-make synthetic-alert-cleanup
-make synthetic-alert-check
+make retraining-strategy-report
+cat reports/latest_retraining_strategy_report.md
 ```
 
-## 7. 운영 리포트 / 증빙 번들
+학습 비용 리포트 생성:
+
+```bash
+make training-cost-report
+cat reports/latest_training_cost_report.md
+```
+
+DB 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type IN ('RETRAINING_STRATEGY', 'TRAINING_COST')
+ORDER BY checked_at DESC, check_type, check_name
+LIMIT 50;
+"
+```
+
+## 7. Training Data Selection Policy
+
+기본 모드:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=full python src/training/train_baseline.py
+"
+```
+
+recent window 실험:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=recent TRAINING_RECENT_DAYS=90 python src/training/train_baseline.py
+"
+```
+
+recent + historical sample 실험:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=recent_plus_history_sample TRAINING_RECENT_DAYS=90 TRAINING_HISTORY_SAMPLE_ROWS_PER_CLASS=50 python src/training/train_baseline.py
+"
+```
+
+## 8. Training Cost Metrics
+
+```bash
+curl -fsS http://localhost:8000/metrics | grep -E "jobskill_training_"
+```
+
+## 9. Prometheus / Alert 검증
+
+```bash
+make metrics-contract-check
+make prometheus-check
+make prometheus-rule-test
+make runbook-check
+make alert-rule-metric-check
+```
+
+## 10. Evidence Bundle 생성
 
 ```bash
 make ops-report
+make retraining-strategy-report
+make training-cost-report
 make ops-evidence-bundle
 make ops-evidence-check
 ```
 
-## 8. CI evidence 흐름 로컬 확인
+ZIP 확인:
 
 ```bash
-make ops-evidence-ci
+unzip -l reports/ops_evidence/jobskill_ops_evidence_*.zip | grep -E "latest_retraining_strategy_report|latest_training_cost_report"
 ```
 
-## 9. CI diagnostics 로컬 확인
+## 11. CI 진단 산출물
+
+실패 진단 수집:
 
 ```bash
 make ci-diagnostics
-ls -R reports/ci_diagnostics | head -80
 ```
 
-## 권장 최종 검증 흐름
+생성 위치:
 
-```bash
-make ops-check
-make ops-report
-make ops-evidence-bundle
-make ops-evidence-check
+```text
+reports/ci_diagnostics/
 ```

@@ -1,191 +1,149 @@
-# jobskill-mlops
+# jobskill-mlops project
 
 [![Python CI](https://github.com/hyunwoo4073/mlops_project/actions/workflows/pytest.yml/badge.svg)](https://github.com/hyunwoo4073/mlops_project/actions/workflows/pytest.yml)
 [![Smoke Check](https://github.com/hyunwoo4073/mlops_project/actions/workflows/smoke.yml/badge.svg)](https://github.com/hyunwoo4073/mlops_project/actions/workflows/smoke.yml)
 
-채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow, MLflow, FastAPI, Streamlit, Prometheus, Alertmanager, Grafana를 연결해 로컬과 CI에서 end-to-end MLOps 운영 흐름을 검증하는 프로젝트입니다.
-
-이 프로젝트는 단순 모델 학습이 아니라 데이터 품질 검증, 모델 성능 검증, 모델 승격/롤백, API serving, production feedback 평가, 재학습 후보 판단, Prometheus metric, alert rule, runbook, smoke check, ops report, evidence bundle, CI failure diagnostics까지 포함한 운영형 MLOps 파이프라인을 목표로 합니다.
+채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow, MLflow, FastAPI, Streamlit, Prometheus, Alertmanager, Grafana를 연결해 데이터 수집부터 운영 검증, 모니터링, 알림, 증빙 산출물까지 구성한 경량 MLOps 프로젝트입니다.
 
 ## 문서 구성
 
 ```text
 README.md
-- 프로젝트를 처음 보는 사람을 위한 간단한 메인 소개 문서입니다.
+- 프로젝트 메인 소개와 빠른 실행 흐름
 
 docs/README_SUMMARY.md
-- 포트폴리오 검토자에게 보여주기 위한 요약 문서입니다.
+- 포트폴리오 검토자용 요약
 
 docs/README_FULL.md
-- 전체 구현 상세, 운영 기능, 트러블슈팅, 검증 절차를 담은 상세 문서입니다.
+- 전체 구현 상세, 운영 기능, 트러블슈팅, 검증 절차
 
 docs/QUICKSTART.md
-- 로컬에서 직접 실행하고 검증하기 위한 명령어 중심 가이드입니다.
+- 로컬 실행 명령어 중심 Quick Start
 ```
 
-권장 확인 순서:
+## 핵심 흐름
 
 ```text
-README.md
-→ docs/README_SUMMARY.md
-→ docs/QUICKSTART.md
-→ docs/README_FULL.md
+데이터 생성/수집
+→ PostgreSQL raw 적재
+→ 전처리/기술스택 추출
+→ Data Contract / Training Data Quality 검증
+→ TF-IDF + Logistic Regression 학습
+→ MLflow experiment / dataset / evaluation artifact 기록
+→ 모델 성능 검증 / class-level gate
+→ best model promotion / archive / rollback
+→ batch inference / FastAPI serving
+→ production feedback 수집
+→ retraining candidate 판단
+→ retraining strategy check
+→ training cost benchmark
+→ metrics / alert / runbook / evidence bundle
 ```
 
-## Architecture
+## 최근 주요 개선
 
 ```text
-Job Data
-→ PostgreSQL
-→ Airflow Pipeline
-→ Data Contract / Quality Checks
-→ Model Training
-→ MLflow Tracking
-→ Model Promotion / Archive / Rollback
-→ Batch Prediction / FastAPI Prediction
-→ Production Feedback
-→ Retraining Candidate Check
-→ Prometheus Metrics
-→ Alertmanager / Slack / Runbook
-→ Streamlit / Grafana Dashboard
-→ Ops Check / Ops Report / Evidence Bundle
-→ GitHub Actions Evidence / Diagnostics Artifacts
-```
+2026-08-04 ~ 2026-08-05
+- Retraining Strategy and Cost Benchmark 추가
+- RETRAINING_STRATEGY / TRAINING_COST 결과를 pipeline_check_results에 저장
+- retraining strategy report와 training cost report 생성
+- training cost metric을 FastAPI /metrics, Prometheus alert, runbook으로 연결
+- Training Data Selection Policy 추가
+- full / lookback / recent / recent_plus_history_sample 학습 데이터 선택 모드 추가
+- ops evidence bundle에 retraining strategy report와 training cost report 포함
 
-## 주요 기능
-
-```text
-Data / Pipeline
-- sample, crawler, mixed 데이터 소스 모드
-- raw / cleaned / skill 테이블 적재
-- Airflow 기반 pipeline orchestration
-- data contract validation
-- pipeline_check_results 기반 품질 검증 이력 저장
-
-ML Lifecycle
-- TF-IDF + Logistic Regression 직무 분류 모델
-- MLflow experiment / artifact / dataset tracking
-- class-level model performance gate
-- best model promotion
-- promoted model archive
-- rollback dry-run / rollback execution
-- model lifecycle integrity check
-- model card 생성
-
-Serving / Feedback
-- FastAPI /predict
-- API prediction log 저장
-- production feedback 입력/조회
-- production accuracy / weighted F1 평가
-- retraining candidate 판단
-- feedback ops 전용 Airflow DAG
-
-Monitoring / Alerting
-- FastAPI /health, /ready, /metrics
-- Prometheus scrape / alert rule
-- Alertmanager webhook
-- Slack notification
-- alert current state / alert history 저장
-- runbook HTML serving
-- MTTA / MTTR / acknowledgement metric
-- maintenance mode / silence / incident report
-
-Ops Validation / Evidence
-- Makefile 기반 명령어 표준화
-- smoke check
-- static ops validation
-- ops-check 통합 검증
-- synthetic alert cleanup
-- alert webhook lifecycle check
-- ops validation report
-- ops evidence bundle ZIP 생성
-- ops evidence bundle 검증
-- GitHub Actions evidence artifact 업로드
-- CI 실패 진단 artifact 업로드
+2026-08-03
+- ops evidence bundle validation 추가
+- CI ops evidence artifact 업로드 추가
+- CI failure diagnostics artifact 추가
+- README / SUMMARY / FULL / QUICKSTART 문서 구조 정리
 ```
 
 ## 주요 명령어
 
 ```bash
-make help
-
-make build
 make up
-make create-tables
-
-make ops-static-check
 make smoke
+make ops-static-check
 make ops-check
 
-make production-feedback-sample
 make production-feedback-check
 make retraining-candidate-check
 
-make alert-webhook-lifecycle-check
-make synthetic-alert-check
+make retraining-strategy-check
+make retraining-strategy-report
+make training-cost-report
 
 make ops-report
 make ops-evidence-bundle
 make ops-evidence-check
-make ops-evidence-ci
-
-make ci-diagnostics
 ```
 
-## 접속 URL
-
-```text
-FastAPI      http://localhost:8000
-Airflow      http://localhost:8080
-MLflow       http://localhost:5000
-Streamlit    http://localhost:8501
-Prometheus   http://localhost:9090
-Alertmanager http://localhost:9093
-Grafana      http://localhost:3000
-```
-
-## 최근 업데이트
-
-```text
-2026-08-03
-- ops evidence bundle 검증 스크립트 추가
-- CI에서 ops evidence bundle 생성/검증/artifact 업로드 흐름 추가
-- CI 실패 시 diagnostics artifact 수집/업로드 흐름 추가
-- Python 3.11 기준 ops validation report f-string syntax 오류 수정
-- README / SUMMARY / FULL / QUICKSTART 문서 역할 재정리
-
-2026-07-31
-- Makefile을 카테고리별로 정리
-- static ops validation / smoke check / ops-check 구조 정리
-- synthetic alert cleanup 도구 추가
-- alert webhook lifecycle check 추가
-- ops validation report 생성 기능 추가
-- ops evidence bundle 생성 기능 추가
-
-2026-07-30
-- retraining candidate check CLI/Makefile/smoke 연결
-- feedback ops 전용 Airflow DAG 추가
-- production feedback / retraining alert rule 정리
-- maintenance mode suppression rule test 반영
-```
-
-## 빠른 실행
+## 재학습 전략/비용 검증
 
 ```bash
-make build
-make up
-make create-tables
-make ops-static-check
-make smoke
+make retraining-strategy-check
+make retraining-strategy-report
+make training-cost-report
 ```
 
-운영 검증 산출물 생성:
+결과 파일:
+
+```text
+reports/latest_retraining_strategy_report.md
+reports/latest_training_cost_report.md
+```
+
+DB 확인:
+
+```bash
+docker exec jobskill-postgres psql -U jobskill -d jobskill -c "
+SELECT
+    check_type,
+    check_name,
+    status,
+    metric_value,
+    threshold_value,
+    checked_at
+FROM pipeline_check_results
+WHERE check_type IN ('RETRAINING_STRATEGY', 'TRAINING_COST')
+ORDER BY checked_at DESC, check_type, check_name
+LIMIT 50;
+"
+```
+
+## 학습 데이터 선택 모드
+
+기본값은 full입니다.
+
+```env
+TRAINING_DATA_MODE=full
+```
+
+실험 실행 예시:
+
+```bash
+docker compose exec -T airflow-scheduler bash -lc "
+cd /opt/airflow/project &&
+TRAINING_DATA_MODE=recent_plus_history_sample TRAINING_RECENT_DAYS=90 TRAINING_HISTORY_SAMPLE_ROWS_PER_CLASS=50 python src/training/train_baseline.py
+"
+```
+
+## 운영 증빙 생성
 
 ```bash
 make ops-check
 make ops-report
+make retraining-strategy-report
+make training-cost-report
 make ops-evidence-bundle
 make ops-evidence-check
 ```
 
-상세 실행 절차는 `docs/QUICKSTART.md`를 확인합니다.
+생성 위치:
+
+```text
+reports/ops_evidence/jobskill_ops_evidence_YYYYMMDD_HHMMSS.zip
+```
+
+상세 내용은 `docs/README_FULL.md`, 빠른 검토는 `docs/README_SUMMARY.md`, 실행 절차는 `docs/QUICKSTART.md`를 참고합니다.
