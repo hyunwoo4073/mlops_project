@@ -35,7 +35,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.common.db import get_engine
 
 
-MODEL_PATH = "models/job_classifier.pkl"
+MODEL_PATH = os.getenv("MODEL_PATH", "models/job_classifier.pkl")
 
 def build_training_dataset_profile(df) -> dict[str, Any]:
     row_count = len(df)
@@ -447,7 +447,7 @@ def main():
 
         mlflow.sklearn.log_model(model, "model")
 
-        os.makedirs("models", exist_ok=True)
+        Path(MODEL_PATH).parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(model, MODEL_PATH)
 
         snapshot = training_cost_timer.finish(

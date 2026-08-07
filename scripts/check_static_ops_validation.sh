@@ -207,6 +207,18 @@ check_optional_python_compile \
   "Compile repository artifact check" \
   scripts/check_repository_artifacts.py
 
+check_python_compile \
+  "Compile training data selection experiment" \
+  scripts/run_training_data_selection_experiment.py
+
+check_python_compile \
+  "Compile training event time check" \
+  src/quality/check_training_event_time.py
+
+check_python_compile \
+  "Compile training data selection policy check" \
+  src/quality/check_training_data_selection_policy.py
+
 # -----------------------------------------------------------------------------
 # Airflow DAGs
 # -----------------------------------------------------------------------------
