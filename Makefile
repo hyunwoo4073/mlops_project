@@ -38,7 +38,7 @@ ALL_RUNTIME_SERVICES := $(AIRFLOW_SERVICES) $(APP_SERVICES)
 	feedback-ops-dag-tasks feedback-ops-dag-info feedback-ops-dag-trigger \
 	lint test test-container ci \
 	smoke data-contract-check model-class-performance-check drift-check \
-	production-feedback-sample production-feedback-check retraining-candidate-check retraining-strategy-check training-cost-report \
+	production-feedback-sample production-feedback-check retraining-candidate-check retraining-strategy-check training-cost-report training-data-selection-experiment training-data-selection-policy-check training-event-time-check \
 	alert-webhook-lifecycle-check synthetic-alert-plan synthetic-alert-cleanup synthetic-alert-check \
 	alert-workflow-check runbook-check metrics-contract-check alert-rule-metric-check \
 	ops-static-check ops-check repo-artifact-check compose-config-check ci-diagnostics \
@@ -49,6 +49,8 @@ ALL_RUNTIME_SERVICES := $(AIRFLOW_SERVICES) $(APP_SERVICES)
 	metrics prometheus prometheus-logs prometheus-check prometheus-rule-test prometheus-external-target-check \
 	alertmanager alertmanager-logs alertmanager-check grafana grafana-logs \
 	cleanup clean-runtime
+	seed-historical-raw-jobs
+	prepare-historical-training-data
 
 help:
 	@echo ""
@@ -91,7 +93,7 @@ help:
 	@echo "  make production-feedback-sample             Create sample feedback from recent predictions"
 	@echo "  make production-feedback-check              Evaluate production feedback performance"
 	@echo "  make retraining-candidate-check             Evaluate and persist retraining candidate decision"
-	@echo "  make retraining-strategy-check             Evaluate retraining data strategy and policy"
+	@echo "  make retraining-strategy-check              Evaluate retraining data strategy and policy"
 	@echo ""
 	@echo "Alert / Incident Ops"
 	@echo "  make alert-webhook-lifecycle-check          Validate firing/resolved alert webhook lifecycle"
@@ -125,7 +127,10 @@ help:
 	@echo "  make model-rollback                         Roll back to archived promoted model"
 	@echo "  make model-lifecycle-check                  Validate model registry, archive and rollback integrity"
 	@echo "  make retraining-strategy-report             Generate retraining strategy report"
-	@echo "  make training-cost-report                  Generate training cost benchmark report"
+	@echo "  make training-cost-report                   Generate training cost benchmark report"
+	@echo "  make training-data-selection-experiment     Compare training data selection modes"
+	@echo "  make training-data-selection-policy-check  Recommend full/recent/sample training policy from experiment results"
+	@echo "  make training-event-time-check             Check timestamp coverage for training data selection"
 	@echo ""
 	@echo "Apps"
 	@echo "  make dashboard                              Start Streamlit dashboard"
@@ -167,6 +172,10 @@ help:
 	@echo "  LIMIT=30 WRONG_EVERY=5 make production-feedback-sample"
 	@echo "  MODEL_ROLLBACK_ARCHIVE_ID=1 make model-rollback-plan"
 	@echo "  MODEL_ROLLBACK_ARCHIVE_ID=1 make model-rollback"
+	@echo ""
+	@echo "Sample data"
+	@echo "  make seed-historical-raw-jobs              Seed timestamp-distributed raw jobs for local policy validation"
+	@echo "  make prepare-historical-training-data      Seed historical raw jobs and rebuild cleaned training data"
 	@echo ""
 
 # -----------------------------------------------------------------------------
@@ -375,6 +384,15 @@ retraining-strategy-report:
 training-cost-report:
 	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/reporting/generate_training_cost_report.py"
 
+training-data-selection-experiment:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python scripts/run_training_data_selection_experiment.py"
+
+training-data-selection-policy-check:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_training_data_selection_policy.py"
+
+training-event-time-check:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/quality/check_training_event_time.py"
+
 # -----------------------------------------------------------------------------
 # Apps
 # -----------------------------------------------------------------------------
@@ -477,3 +495,10 @@ clean-runtime:
 	rm -rf reports/*
 	rm -rf data/raw/*
 	rm -rf data/processed/*
+
+seed-historical-raw-jobs:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && HISTORICAL_SEED_ROWS=5000 HISTORICAL_SEED_HISTORY_DAYS=240 python scripts/seed_historical_raw_jobs.py"
+
+prepare-historical-training-data:
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && HISTORICAL_SEED_ROWS=5000 HISTORICAL_SEED_HISTORY_DAYS=240 python scripts/seed_historical_raw_jobs.py"
+	$(COMPOSE) exec -T $(AIRFLOW_SERVICE) bash -lc "cd $(PROJECT_DIR) && python src/preprocessing/preprocess_jobs.py"

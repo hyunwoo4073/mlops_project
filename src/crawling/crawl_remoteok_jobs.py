@@ -248,16 +248,15 @@ def insert_raw_jobs(jobs: list[dict[str, Any]]) -> int:
             :tags,
             :crawled_at
         )
-        ON CONFLICT (source, source_job_id)
-        DO UPDATE SET
-            title = EXCLUDED.title,
-            company = EXCLUDED.company,
-            location = EXCLUDED.location,
-            description = EXCLUDED.description,
-            tags = EXCLUDED.tags,
-            external_id = EXCLUDED.external_id,
-            source_url = EXCLUDED.source_url,
-            crawled_at = EXCLUDED.crawled_at
+            ON CONFLICT (source, source_job_id)
+            DO UPDATE SET
+                title = EXCLUDED.title,
+                company = EXCLUDED.company,
+                location = EXCLUDED.location,
+                description = EXCLUDED.description,
+                tags = EXCLUDED.tags,
+                external_id = EXCLUDED.external_id,
+                source_url = EXCLUDED.source_url
         """
     )
 

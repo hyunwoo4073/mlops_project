@@ -1,172 +1,93 @@
 # jobskill-mlops Summary
 
-## 프로젝트 개요
+## 프로젝트 한 줄 요약
 
-`jobskill-mlops`는 채용공고 데이터를 기반으로 직무 분류 모델을 학습하고, Airflow/MLflow/FastAPI/Streamlit/Prometheus/Alertmanager/Grafana를 연결해 end-to-end MLOps 운영 흐름을 구성한 프로젝트입니다.
+`jobskill-mlops`는 채용공고 데이터를 수집하고 직무 분류 모델을 학습한 뒤, 운영 feedback과 evidence 기반으로 재학습 전략까지 판단하는 end-to-end MLOps 포트폴리오 프로젝트입니다.
 
-## 핵심 아키텍처
-
-```text
-PostgreSQL
-- raw_job_posts
-- cleaned_job_posts
-- job_post_skills
-- model_predictions
-- prediction_feedbacks
-- pipeline_check_results
-- model_registry
-- alert_events
-- alert_current_states
-
-Airflow
-- jobskill_mlops_pipeline
-- jobskill_feedback_ops
-
-MLflow
-- training dataset tracking
-- evaluation artifact
-- model artifact
-- training cost metric
-
-FastAPI
-- /predict
-- /health
-- /ready
-- /metrics
-- /alertmanager/webhook
-- /runbooks
-
-Streamlit
-- model lifecycle
-- model evaluation
-- model card
-- production feedback
-- retraining candidate
-- alert history
-- incident report
-
-Prometheus / Alertmanager / Grafana
-- metrics contract
-- alert rule
-- rule test
-- runbook
-- Slack notification
-```
-
-## 최근 개선: Retraining Strategy and Cost Benchmark
-
-2026-08-04 ~ 2026-08-05 작업으로 production feedback 기반 재학습 후보 판단 이후, 어떤 방식으로 재학습할지 판단하는 운영 계층을 추가했습니다.
+## 전체 흐름
 
 ```text
-Production Feedback
-→ Retraining Candidate
-→ Retraining Strategy Check
-→ Training Cost Benchmark
-→ Training Cost Monitoring
-→ Training Data Selection Policy
+Remote OK crawler
+→ raw_job_posts 적재
+→ preprocessing
+→ cleaned_job_posts 생성
+→ data contract / quality check
+→ MLflow training
+→ model evaluation / class performance gate
+→ model promotion / archive / rollback
+→ FastAPI serving / batch inference
+→ production feedback
+→ retraining candidate / strategy / cost benchmark
+→ training data selection experiment
+→ evidence gate
+→ ops evidence bundle
 ```
 
-추가된 주요 파일:
+## 핵심 운영 포인트
 
 ```text
-src/quality/check_retraining_strategy.py
-src/reporting/generate_retraining_strategy_report.py
-src/common/training_cost.py
-src/reporting/generate_training_cost_report.py
-src/training/training_data_selector.py
-docs/runbooks/jobskill_training_duration_high.md
+1. 실제 ingestion과 실험용 seed 분리
+   - 실제 경로는 Remote OK crawler
+   - local policy validation은 remoteok_seed source의 historical seed data 사용
+
+2. Event-time 기반 retraining selection
+   - raw_job_posts.crawled_at을 training_event_at으로 표준화
+   - full / lookback / recent / recent_plus_history_sample mode 지원
+
+3. Selection experiment
+   - full baseline과 reduced-data retrain mode를 shadow experiment로 비교
+   - accuracy, weighted F1, selected rows, recent/historical rows, duration 기록
+
+4. Evidence Gate
+   - 데이터 부족 또는 row reduction 없음 상태에서는 candidate 추천 금지
+   - INSUFFICIENT_EXPERIMENT_DATA / KEEP_FULL_RETRAIN / CANDIDATE_FOR_SHADOW_PROMOTION 상태 분리
+
+5. 운영 evidence
+   - training event time report
+   - training selection experiment report
+   - training selection policy report
+   - training cost report
+   - ops validation report
+   - ops evidence zip bundle
 ```
 
-추가된 Makefile target:
+## 2026-08-07 검증 결과 요약
 
 ```text
-retraining-strategy-check
-retraining-strategy-report
-training-cost-report
+Event Time Coverage
+- source_columns=['raw_job_posts.crawled_at']
+- usable_event_time_rows=5370
+- distinct_event_dates=242
+
+Selection Preview
+- full=5370 rows
+- lookback=4512 rows
+- recent=3171 rows
+- recent_plus_history_sample=3671 rows
+
+Experiment Result
+- full: accuracy=0.9913, f1_weighted=0.9913
+- recent: accuracy=0.9811, f1_weighted=0.9812
+- recent_plus_history_sample: accuracy=0.9891, f1_weighted=0.9891
 ```
 
-추가된 report:
+## 현재 해석
 
 ```text
-reports/latest_retraining_strategy_report.md
-reports/latest_training_cost_report.md
+full
+- 최고 성능 baseline
+- 운영 retrain 기본 경로 유지
+
+recent
+- row reduction이 가장 큼
+- 성능 하락도 더 큼
+- aggressive row-reduction shadow 후보
+
+recent_plus_history_sample
+- row reduction이 있고 F1 하락이 작음
+- 우선 shadow validation 후보
 ```
 
-추가된 check_type:
+## 검토자에게 보여줄 포인트
 
-```text
-RETRAINING_STRATEGY
-TRAINING_COST
-```
-
-추가된 주요 metric:
-
-```text
-jobskill_training_duration_seconds
-jobskill_training_duration_threshold_seconds
-jobskill_training_rows
-jobskill_training_category_count
-jobskill_training_throughput_rows_per_second
-jobskill_training_model_size_bytes
-jobskill_training_incremental_experiment_by_duration
-```
-
-추가된 alert:
-
-```text
-JobSkillTrainingDurationHigh
-```
-
-## 운영 검증 명령어
-
-```bash
-make ops-static-check
-make ops-check
-make smoke
-make metrics-contract-check
-make prometheus-check
-make prometheus-rule-test
-make runbook-check
-make alert-rule-metric-check
-```
-
-## 재학습 전략 검증 명령어
-
-```bash
-make production-feedback-check
-make retraining-candidate-check
-make retraining-strategy-check
-make retraining-strategy-report
-make training-cost-report
-```
-
-## Evidence Bundle
-
-운영 검증 결과는 evidence bundle로 묶습니다.
-
-```bash
-make ops-report
-make retraining-strategy-report
-make training-cost-report
-make ops-evidence-bundle
-make ops-evidence-check
-```
-
-포함되는 주요 파일:
-
-```text
-README.md
-docs/README_SUMMARY.md
-docs/QUICKSTART.md
-docs/README_FULL.md
-reports/latest_ops_validation_report.md
-reports/latest_retraining_strategy_report.md
-reports/latest_training_cost_report.md
-docs/runbooks/*
-monitoring/metrics_contract.yml
-monitoring/prometheus/rules/jobskill_alert_rules.yml
-monitoring/prometheus/tests/jobskill_alert_rules.test.yml
-monitoring/alertmanager/alertmanager.yml
-docker-compose.yml
-Makefile
-```
+이 프로젝트는 단일 모델 학습 결과만 보여주는 것이 아니라, 모델 운영 이후에 feedback, retraining strategy, training cost, training data selection policy, evidence gate를 연결해 “언제, 어떤 데이터로, 어떤 방식으로 다시 학습할 것인가”를 판단하는 운영형 MLOps 구조를 포함합니다.

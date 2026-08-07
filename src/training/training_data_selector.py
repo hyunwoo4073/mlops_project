@@ -18,6 +18,35 @@ SUPPORTED_TRAINING_DATA_MODES = {
     "recent_plus_history_sample",
 }
 
+TEMPORAL_DATA_TYPES = {
+    "date",
+    "timestamp without time zone",
+    "timestamp with time zone",
+}
+
+DEFAULT_CLEANED_TIME_COLUMNS = [
+    "training_event_at",
+    "posted_at",
+    "published_at",
+    "created_at",
+    "updated_at",
+    "ingested_at",
+    "loaded_at",
+    "processed_at",
+]
+
+DEFAULT_RAW_TIME_COLUMNS = [
+    "posted_at",
+    "published_at",
+    "collected_at",
+    "crawled_at",
+    "scraped_at",
+    "created_at",
+    "updated_at",
+    "ingested_at",
+    "loaded_at",
+]
+
 
 @dataclass(frozen=True)
 class TrainingDataSelectionConfig:
@@ -44,6 +73,14 @@ class TrainingDataSelectionResult:
     details: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class TrainingEventTimeSource:
+    expression: str
+    source_columns: list[str]
+    cleaned_temporal_columns: list[str]
+    raw_temporal_columns: list[str]
+
+
 def getenv_int(name: str, default: int) -> int:
     raw_value = os.getenv(name)
 
@@ -54,6 +91,15 @@ def getenv_int(name: str, default: int) -> int:
         return int(raw_value)
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer. value={raw_value}") from exc
+
+
+def parse_column_candidates(name: str, defaults: list[str]) -> list[str]:
+    raw_value = os.getenv(name)
+
+    if raw_value is None or raw_value.strip() == "":
+        return defaults
+
+    return [value.strip() for value in raw_value.split(",") if value.strip()]
 
 
 def load_training_data_selection_config() -> TrainingDataSelectionConfig:
@@ -89,9 +135,11 @@ def quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def get_table_columns(engine: Engine, table_name: str) -> set[str]:
+def get_table_columns(engine: Engine, table_name: str) -> dict[str, str]:
     query = """
-        SELECT column_name
+        SELECT
+            column_name,
+            data_type
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = :table_name
@@ -100,29 +148,80 @@ def get_table_columns(engine: Engine, table_name: str) -> set[str]:
     with engine.begin() as conn:
         rows = conn.execute(text(query), {"table_name": table_name}).mappings().all()
 
-    return {str(row["column_name"]) for row in rows}
+    return {
+        str(row["column_name"]): str(row["data_type"])
+        for row in rows
+    }
 
 
-def first_existing_column(columns: set[str], candidates: list[str]) -> str | None:
-    for candidate in candidates:
-        if candidate in columns:
-            return candidate
+def temporal_columns(
+    columns: dict[str, str],
+    candidates: list[str],
+) -> list[str]:
+    return [
+        candidate
+        for candidate in candidates
+        if candidate in columns
+        and columns[candidate].lower() in TEMPORAL_DATA_TYPES
+    ]
 
-    return None
+
+def column_expression(alias: str, column_name: str) -> str:
+    return f"{alias}.{quote_ident(column_name)}::timestamp"
+
+
+def resolve_training_event_time_source(engine: Engine) -> TrainingEventTimeSource:
+    cleaned_columns = get_table_columns(engine, "cleaned_job_posts")
+    raw_columns = get_table_columns(engine, "raw_job_posts")
+
+    cleaned_candidates = parse_column_candidates(
+        "TRAINING_CLEANED_TIME_COLUMNS",
+        DEFAULT_CLEANED_TIME_COLUMNS,
+    )
+    raw_candidates = parse_column_candidates(
+        "TRAINING_RAW_TIME_COLUMNS",
+        DEFAULT_RAW_TIME_COLUMNS,
+    )
+
+    cleaned_temporal_columns = temporal_columns(cleaned_columns, cleaned_candidates)
+    raw_temporal_columns = temporal_columns(raw_columns, raw_candidates)
+
+    source_expressions: list[str] = []
+    source_columns: list[str] = []
+
+    if cleaned_temporal_columns:
+        selected_column = cleaned_temporal_columns[0]
+        source_expressions.append(column_expression("c", selected_column))
+        source_columns.append(f"cleaned_job_posts.{selected_column}")
+
+    if raw_temporal_columns:
+        selected_column = raw_temporal_columns[0]
+        source_expressions.append(column_expression("r", selected_column))
+        source_columns.append(f"raw_job_posts.{selected_column}")
+
+    if not source_expressions:
+        return TrainingEventTimeSource(
+            expression="NULL::timestamp AS training_event_at",
+            source_columns=[],
+            cleaned_temporal_columns=cleaned_temporal_columns,
+            raw_temporal_columns=raw_temporal_columns,
+        )
+
+    if len(source_expressions) == 1:
+        expression = f"{source_expressions[0]} AS training_event_at"
+    else:
+        expression = f"COALESCE({', '.join(source_expressions)}) AS training_event_at"
+
+    return TrainingEventTimeSource(
+        expression=expression,
+        source_columns=source_columns,
+        cleaned_temporal_columns=cleaned_temporal_columns,
+        raw_temporal_columns=raw_temporal_columns,
+    )
 
 
 def build_training_query(engine: Engine) -> str:
-    cleaned_columns = get_table_columns(engine, "cleaned_job_posts")
-
-    date_column = first_existing_column(
-        cleaned_columns,
-        ["created_at", "updated_at", "posted_at", "ingested_at", "loaded_at"],
-    )
-
-    if date_column:
-        event_time_select = f"c.{quote_ident(date_column)} AS training_event_at"
-    else:
-        event_time_select = "NULL::timestamp AS training_event_at"
+    event_time_source = resolve_training_event_time_source(engine)
 
     return f"""
         SELECT
@@ -131,7 +230,7 @@ def build_training_query(engine: Engine) -> str:
             COALESCE(r.source, 'unknown') AS source,
             c.text_for_model,
             c.job_category,
-            {event_time_select}
+            {event_time_source.expression}
         FROM cleaned_job_posts c
         LEFT JOIN raw_job_posts r
         ON c.raw_id = r.id
@@ -139,7 +238,6 @@ def build_training_query(engine: Engine) -> str:
         AND c.job_category != 'Unknown'
         AND c.text_for_model IS NOT NULL
     """
-
 
 def _category_distribution(df: pd.DataFrame) -> dict[str, int]:
     if "job_category" not in df.columns:
@@ -282,17 +380,23 @@ def select_training_data(
         historical_df = df[event_time < recent_cutoff].copy()
 
         if not historical_df.empty and "job_category" in historical_df.columns:
-            sampled_history_df = (
-                historical_df
-                .groupby("job_category", group_keys=False)
-                .apply(
-                    lambda group: group.sample(
-                        n=min(len(group), resolved_config.history_sample_rows_per_class),
+            sampled_groups = []
+
+            for _, group in historical_df.groupby("job_category", group_keys=False):
+                sampled_groups.append(
+                    group.sample(
+                        n=min(
+                            len(group),
+                            resolved_config.history_sample_rows_per_class,
+                        ),
                         random_state=resolved_config.random_state,
                     )
                 )
-                .reset_index(drop=True)
-            )
+
+            if sampled_groups:
+                sampled_history_df = pd.concat(sampled_groups, ignore_index=True)
+            else:
+                sampled_history_df = historical_df.head(0).copy()
         else:
             sampled_history_df = historical_df.head(0).copy()
 
@@ -401,4 +505,3 @@ def log_training_data_selection_to_mlflow(
         ),
         artifact_file="training_data_selection.json",
     )
-

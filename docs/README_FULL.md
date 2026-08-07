@@ -30,6 +30,29 @@ docs/QUICKSTART.md
 ## 주요 업데이트 내역
 
 ```text
+2026-08-07
+- Training Event Time Resolution 흐름 추가
+- `raw_job_posts.crawled_at`을 `training_event_at`으로 표준화해 `full`, `lookback`, `recent`, `recent_plus_history_sample` 학습 데이터 선택 정책이 실제 event-time 기준으로 동작하도록 개선
+- `src/quality/check_training_event_time.py` 추가로 event-time source column, usable event-time row 수, null event-time row 수, min/max event time, distinct event date 수, mode별 selection preview를 리포트로 생성
+- 검증 결과 `raw_job_posts.crawled_at` 기반 `training_event_at`이 정상 생성되었고, 5,370건 전체가 usable event time을 가지며 242개 날짜에 분포하는 것을 확인
+- selection preview 기준 `full=5,370 rows`, `lookback=4,512 rows`, `recent=3,171 rows`, `recent_plus_history_sample=3,671 rows`로 mode별 row reduction이 실제 발생하는 것을 확인
+- `scripts/run_training_data_selection_experiment.py` 추가/개선으로 `full`, `recent`, `recent_plus_history_sample`을 shadow experiment로 순차 실행하고 mode별 accuracy, weighted F1, selected rows, recent/historical rows, training duration, model artifact path를 Markdown report로 생성
+- Docker Compose 내부 `postgres` DNS 일시 실패에 대비해 experiment runner에 mode별 retry, transient DB/DNS failure 감지, `getent hosts postgres` preflight check를 추가
+- `MODEL_PATH=models/experiments/...` 사용 시 상위 디렉터리가 없어서 모델 저장이 실패하던 문제를 `Path(MODEL_PATH).parent.mkdir(parents=True, exist_ok=True)` 방식으로 수정
+- 실험 결과 `full`은 `accuracy=0.9913`, `f1_weighted=0.9913`, `after_rows=5,370`으로 최고 성능 baseline임을 확인
+- `recent`는 `after_rows=3,171`, `accuracy=0.9811`, `f1_weighted=0.9812`로 약 41% row reduction을 만들었지만 full 대비 F1 하락이 더 큰 aggressive row-reduction 후보로 해석
+- `recent_plus_history_sample`은 `after_rows=3,671`, `accuracy=0.9891`, `f1_weighted=0.9891`로 약 32% row reduction을 만들면서 성능 하락이 작아 우선 shadow validation 후보로 해석
+- `src/quality/check_training_data_selection_policy.py`에 Training Selection Evidence Gate 추가
+- Evidence Gate는 baseline row 수, class별 row 수, distinct event date 수, usable event-time coverage, 실제 row reduction 여부를 확인해 데이터 근거가 부족하면 `INSUFFICIENT_EXPERIMENT_DATA`로 판단하도록 개선
+- policy recommendation 상태를 `INSUFFICIENT_EXPERIMENT_DATA`, `KEEP_FULL_RETRAIN`, `CANDIDATE_FOR_SHADOW_PROMOTION`으로 구분해 단일 실험 결과가 좋아 보여도 근거가 부족하면 reduced retraining mode를 추천하지 않도록 정리
+- policy report에 Evidence Thresholds, Event Time Coverage, Class Distribution 섹션을 추가해 candidate 판단 근거를 문서화
+- Remote OK crawler는 실제 ingestion 경로로 유지하고, 로컬 retraining policy 검증용 데이터는 별도 `remoteok_seed` source의 historical seed data로 분리하는 방향으로 정리
+- `crawled_at`은 training event time 기준으로 사용하되, 실제 crawler upsert에서는 최초 수집 시점 의미가 훼손되지 않도록 conflict update에서 무분별하게 덮어쓰지 않는 방향을 권장
+- `recent_plus_history_sample`의 historical class-balanced sampling 구현에서 `DataFrameGroupBy.apply()`를 제거하고 for-loop + `pd.concat()` 방식으로 변경해 pandas FutureWarning을 해결
+- `.env.example`에 `TRAINING_RAW_TIME_COLUMNS=crawled_at`, `TRAINING_SELECTION_MIN_BASELINE_ROWS`, `TRAINING_SELECTION_MIN_ROWS_PER_CLASS`, `TRAINING_SELECTION_MIN_DISTINCT_EVENT_DATES`, `TRAINING_SELECTION_REQUIRE_ROW_REDUCTION` 등 evidence gate 관련 설정을 문서화
+- `scripts/create_ops_evidence_bundle.py`에 `reports/latest_training_event_time_report.md`, `reports/latest_training_data_selection_experiment_report.md`, `reports/latest_training_data_selection_policy_report.md`를 포함하도록 정리
+- README, 상세 README, 요약본, Quick Start 문서에 Training Event Time, Selection Experiment, Evidence Gate, Historical Seed Validation 흐름을 반영
+
 2026-08-04 ~ 2026-08-05
 - Retraining Strategy and Cost Benchmark 흐름 추가
 - `src/quality/check_retraining_strategy.py` 추가로 `cleaned_job_posts` row 수, 최근 window row 수, category별 row 수, class imbalance, production feedback row 수를 기반으로 재학습 전략을 판단하도록 개선
@@ -2162,6 +2185,243 @@ training_data_selection.json
 ```
 
 이 기능을 통해 full retrain, recent retrain, recent + historical sample retrain의 비용과 성능을 MLflow 및 report 기준으로 비교할 수 있습니다.
+
+## Training Event Time Resolution and Selection Evidence Gate
+
+Training Event Time Resolution은 학습 데이터 선택 정책이 실제 시간 기준으로 동작하도록 `training_event_at`을 표준화하는 기능입니다.
+
+기존 `TRAINING_DATA_MODE=recent` 또는 `recent_plus_history_sample`은 `training_event_at`에 usable datetime 값이 없으면 `full`로 fallback될 수 있었습니다. 이번 개선에서는 `raw_job_posts.crawled_at`을 `training_event_at`으로 사용해 full/recent/window/sample 학습 데이터가 실제 event-time 기준으로 분리되도록 구성했습니다.
+
+구성 파일:
+
+```text
+src/training/training_data_selector.py
+src/quality/check_training_event_time.py
+src/quality/check_training_data_selection_policy.py
+scripts/run_training_data_selection_experiment.py
+```
+
+### Event Time Source
+
+현재 schema 기준 event-time source는 아래와 같습니다.
+
+```text
+raw_job_posts.crawled_at
+→ training_event_at
+→ full / lookback / recent / recent_plus_history_sample selection 기준
+```
+
+`check_training_event_time.py`는 아래 항목을 검증합니다.
+
+```text
+source_columns
+cleaned_temporal_columns
+raw_temporal_columns
+usable_event_time_rows
+null_event_time_rows
+min_event_time
+max_event_time
+distinct_event_dates
+mode별 before_rows / after_rows / recent_rows / historical_rows
+```
+
+실행:
+
+```bash
+make training-event-time-check
+cat reports/latest_training_event_time_report.md
+```
+
+검증 예시:
+
+```text
+source_columns=['raw_job_posts.crawled_at']
+usable_event_time_rows=5370
+null_event_time_rows=0
+distinct_event_dates=242
+full after_rows=5370
+recent after_rows=3171
+recent_plus_history_sample after_rows=3671
+```
+
+이 결과는 `recent`와 `recent_plus_history_sample`이 더 이상 full fallback이 아니라 실제 row reduction을 만들고 있음을 의미합니다.
+
+### Training Data Selection Experiment
+
+Training Data Selection Experiment는 `full`, `recent`, `recent_plus_history_sample`을 순차 실행하고 각 mode의 성능과 비용 지표를 비교하는 shadow experiment입니다.
+
+실행:
+
+```bash
+make training-data-selection-experiment
+cat reports/latest_training_data_selection_experiment_report.md
+```
+
+리포트 항목:
+
+```text
+mode
+status
+attempt
+transient_failure
+requested_mode
+applied_mode
+before_rows
+after_rows
+recent_rows
+historical_rows
+accuracy
+f1_weighted
+duration_seconds
+model_path
+```
+
+Docker Compose 내부 DNS 또는 DB connection이 순간적으로 실패할 수 있으므로 experiment runner는 아래 transient failure를 감지하고 mode별 retry를 수행합니다.
+
+```text
+Temporary failure in name resolution
+could not translate host name
+server closed the connection unexpectedly
+connection already closed
+SSL SYSCALL error: EOF detected
+OperationalError
+```
+
+### 실험 결과 해석 기준
+
+검증 예시 기준:
+
+```text
+full
+- after_rows=5370
+- accuracy=0.9913
+- f1_weighted=0.9913
+
+recent
+- after_rows=3171
+- accuracy=0.9811
+- f1_weighted=0.9812
+- row_ratio≈0.5905
+
+recent_plus_history_sample
+- after_rows=3671
+- accuracy=0.9891
+- f1_weighted=0.9891
+- row_ratio≈0.6836
+```
+
+해석:
+
+```text
+full
+- 가장 높은 weighted F1을 기록했으므로 운영 baseline으로 유지
+
+recent
+- row reduction은 가장 크지만 F1 하락도 상대적으로 큼
+- aggressive row-reduction shadow 후보
+
+recent_plus_history_sample
+- row reduction이 있고 F1 하락이 작음
+- 우선 shadow validation 후보로 해석
+```
+
+현재 프로젝트는 실험 결과가 좋아도 promoted model을 자동 변경하지 않습니다. reduced retraining mode는 반복 shadow validation과 evidence gate를 통과한 뒤에만 운영 후보로 검토합니다.
+
+### Training Selection Evidence Gate
+
+Evidence Gate는 실험 결과가 좋아 보여도 데이터 근거가 부족하면 reduced retraining mode를 추천하지 않도록 하는 정책 검증 단계입니다.
+
+판단 상태:
+
+```text
+INSUFFICIENT_EXPERIMENT_DATA
+- baseline row 수, class별 row 수, event-time coverage, row reduction 근거가 부족해 판단 보류
+
+KEEP_FULL_RETRAIN
+- evidence는 충분하지만 candidate 성능/비용 기준이 부족해 full 유지
+
+CANDIDATE_FOR_SHADOW_PROMOTION
+- evidence가 충분하고 성능 하락이 허용 범위 내이며 실제 row reduction이 있어 반복 shadow 검증 후보
+```
+
+관련 환경변수:
+
+```env
+TRAINING_SELECTION_MIN_BASELINE_ROWS=3000
+TRAINING_SELECTION_MIN_ROWS_PER_CLASS=300
+TRAINING_SELECTION_MIN_DISTINCT_EVENT_DATES=90
+TRAINING_SELECTION_REQUIRE_ROW_REDUCTION=true
+TRAINING_SELECTION_MAX_ACCURACY_DROP=0.02
+TRAINING_SELECTION_MAX_F1_DROP=0.02
+TRAINING_SELECTION_MAX_ROW_RATIO=0.90
+TRAINING_DATA_SELECTION_POLICY_WRITE_DB=true
+TRAINING_DATA_SELECTION_POLICY_STRICT=false
+TRAINING_DATA_SELECTION_POLICY_REPORT_PATH=reports/latest_training_data_selection_policy_report.md
+```
+
+실행:
+
+```bash
+make training-data-selection-policy-check
+cat reports/latest_training_data_selection_policy_report.md
+```
+
+리포트에 포함되는 evidence 섹션:
+
+```text
+Evidence Thresholds
+Event Time Coverage
+Class Distribution
+Policy Decisions
+Decision Reasons
+```
+
+### Remote OK Crawler와 Historical Seed 역할 분리
+
+이 프로젝트의 실제 ingestion 경로는 Remote OK crawler입니다.
+
+```text
+Remote OK API
+→ raw_job_posts(source='remoteok')
+→ crawled_at 기록
+→ preprocess
+→ training pipeline
+```
+
+로컬에서 retraining selection policy를 검증하려면 충분한 row 수와 event-time 분포가 필요합니다. 이를 위해 실제 crawler를 대체하지 않고, 별도 source로 historical seed data를 넣는 방식을 사용합니다.
+
+```text
+historical seed
+→ raw_job_posts(source='remoteok_seed')
+→ crawled_at을 240일 이상에 분포
+→ preprocess
+→ event-time check
+→ selection experiment
+→ evidence gate
+```
+
+즉, seed data는 운영 ingestion 대체가 아니라 로컬 policy validation 용도입니다.
+
+### Pandas FutureWarning 정리
+
+`recent_plus_history_sample`의 historical class-balanced sampling에서 `DataFrameGroupBy.apply()`를 사용하면 pandas FutureWarning이 발생할 수 있습니다.
+
+기존 방식:
+
+```text
+groupby("job_category").apply(...)
+```
+
+수정 방식:
+
+```text
+for _, group in historical_df.groupby("job_category"):
+    group.sample(...)
+
+pd.concat(sampled_groups, ignore_index=True)
+```
+
+이렇게 바꾸면 pandas 버전이 올라가도 grouping column 처리 변경에 영향을 받지 않습니다.
 
 ## 프로젝트 목표
 
@@ -8763,33 +9023,35 @@ Makefile model-class-performance-check / model-card 명령어 추가
 ## 오늘 작업 요약
 
 ```text
-Alertmanager notification failure monitoring 추가
-Prometheus가 Alertmanager /metrics를 scrape하도록 alertmanager scrape job 구성
-alertmanager_notifications_failed_total 기반 JobSkillAlertmanagerNotificationFailure alert rule 추가
-Alertmanager notification failure 대응 runbook 추가
-Prometheus rule test에 Alertmanager notification failure firing 케이스 추가
-metrics_contract.yml에 external_metrics.alertmanager 구조 추가
-check_metrics_contract.py를 FastAPI + external metric source를 함께 검증하도록 개선
-check_alert_rule_metric_dependencies.py를 multi-source metric dependency check 구조로 개선
-PromQL grouping label(receiver, integration)을 metric으로 오인하지 않도록 parser 개선
-label 없는 metric line을 정상 파싱하도록 regex 수정
-prometheus_metrics.py에서 query 결과가 비어도 required metric을 0 값으로 노출하도록 안정화
-DB 초기화 직후에도 alert acknowledgement / MTTA / unacknowledged current metric이 missing 되지 않도록 수정
-runbook-check / metrics-contract-check / alert-rule-metric-check / prometheus-rule-test 정상 동작 확인
-README가 길어짐에 따라 README 요약본과 Quick Start 문서 분리 관리 구조 정리
+Training Event Time Resolution 추가
+raw_job_posts.crawled_at을 training_event_at으로 표준화
+check_training_event_time.py 기반 event-time source / coverage / selection preview report 생성
+검증 결과 source_columns=['raw_job_posts.crawled_at'], usable_event_time_rows=5370, distinct_event_dates=242 확인
+full=5370, recent=3171, recent_plus_history_sample=3671 rows로 실제 row reduction 확인
+Training Data Selection Experiment runner 추가 및 안정화
+full / recent / recent_plus_history_sample shadow experiment 실행 결과 report 생성
+postgres DNS 일시 실패 대응을 위해 experiment runner에 retry / transient failure detection / getent hosts postgres preflight 추가
+MODEL_PATH=models/experiments/... 저장 시 상위 디렉터리 미생성 문제 수정
+실험 결과 full은 최고 성능 baseline, recent는 aggressive row-reduction 후보, recent_plus_history_sample은 우선 shadow validation 후보로 해석
+Training Selection Evidence Gate 추가
+데이터 부족, class coverage 부족, event-time coverage 부족, row reduction 없음 상태에서는 INSUFFICIENT_EXPERIMENT_DATA로 판단하도록 개선
+policy report에 Evidence Thresholds, Event Time Coverage, Class Distribution 섹션 추가
+Remote OK crawler는 실제 ingestion 경로로 유지하고 historical seed는 local validation 용도로 분리
+large sample generator 방향은 폐기하고 raw_job_posts에 별도 source(remoteok_seed)로 historical seed를 넣는 방향으로 정리
+recent_plus_history_sample sampling에서 pandas groupby.apply FutureWarning을 제거하고 for-loop + pd.concat 방식으로 변경
+README / README_FULL / README_SUMMARY / QUICKSTART에 오늘 작업 반영
 ```
 
 ## 다음 개선 예정
 
 ```text
-README.md를 포트폴리오용 짧은 메인 문서로 축소하고 상세 구현 문서는 docs/README_FULL.md로 이동
-docs/README_SUMMARY.md와 docs/QUICKSTART.md를 실제 repo 문서로 편입
-Prometheus external target scrape check를 ops-check에 포함
-Prometheus /api/v1/targets에서 external_metrics source의 target health를 자동 검증
-Alertmanager notification failure test를 안전하게 재현하는 Makefile target 추가
-Slack webhook 복구 테스트 절차를 runbook과 Quick Start에 연결
-CI smoke check에서 external_metrics contract와 alert rule dependency check를 함께 검증
-Streamlit Dashboard에 Metrics Contract / Alert Rule Dependency Check 결과 요약 탭 추가
-운영 문서와 runbook의 최신성 검증을 위한 docs consistency check 추가
-generated reports와 runtime artifacts의 Git 포함 여부를 repo-artifact-check로 지속 검증
+training selection experiment 결과를 DB에 누적 저장해 repeated-run 평균 기반 policy gate로 확장
+TRAINING_SELECTION_MIN_REPEATED_RUNS=3 기준으로 단일 실행 편차를 줄이는 validation history 구성
+recent / recent_plus_history_sample별 평균 accuracy delta, 평균 F1 delta, 평균 row ratio, 평균 duration ratio 리포트 추가
+Historical seed data와 실제 Remote OK crawl data를 source별로 분리해 report에서 실제 데이터와 seed 데이터를 구분 표시
+Remote OK crawler의 crawled_at / first_seen / last_seen semantics 정리 및 필요 시 last_seen_at 컬럼 추가 검토
+Training selection policy 결과를 FastAPI /metrics에 노출하고 Prometheus alert / runbook / dashboard로 연결
+Streamlit Dashboard에 Training Data Selection / Evidence Gate 탭 추가
+ops-evidence bundle에 training_event_time, selection_experiment, selection_policy report 포함 여부를 지속 검증
+README 문서와 실제 Makefile target 간 consistency check 추가
 ```
